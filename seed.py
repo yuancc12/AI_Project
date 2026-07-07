@@ -32,7 +32,7 @@ CREATE TABLE users (
     created_at TEXT NOT NULL
 );
 
--- 健身採買諮詢單（submit_inquiry 寫入此表）
+-- 健身採買諮詢單（submit_inquiry 寫入；dispatch_delivery 更新配送欄位）
 CREATE TABLE inquiry (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     inquiry_no    TEXT UNIQUE NOT NULL,
@@ -42,7 +42,10 @@ CREATE TABLE inquiry (
     contact_name  TEXT,
     contact_phone TEXT,
     note          TEXT,
-    status        TEXT NOT NULL DEFAULT '待處理',
+    status        TEXT NOT NULL DEFAULT '待處理',  -- 待處理/配送中/已拒絕/已完成
+    vendor_reply  TEXT NOT NULL DEFAULT '',        -- 廠商回覆訊息
+    accepted_at   TEXT NOT NULL DEFAULT '',        -- 接單時間（ISO）
+    delivery_no   TEXT NOT NULL DEFAULT '',        -- 外送單號 DL...
     created_at    TEXT NOT NULL
 );
 """
