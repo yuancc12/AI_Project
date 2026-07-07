@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+butler.db
+*.db-shm
+*.db-wal
+.env
