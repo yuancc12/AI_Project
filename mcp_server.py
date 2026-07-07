@@ -186,6 +186,132 @@ def match_vendors(category_id: int, county_code: str,
 
 
 # ---------------------------------------------------------------------------
+# 工具 4：依關鍵字搜尋健身商品
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def search_grocery(keyword: str) -> str:
+    """在統一集團各業務（7-11、家樂福、康是美、統一生機）的健身商品庫中，
+    依關鍵字搜尋符合的商品，回傳商品清單（含所屬業務、蛋白質、熱量、價格、庫存）。
+    當使用者想查詢某種食材、品項或商品是否有售、在哪裡買得到時，呼叫此工具。
+    例如：「有沒有雞胸肉」「乳清蛋白哪裡賣」「我想找高蛋白零食」。
+
+    參數:
+        keyword: 搜尋關鍵字，例如「雞胸」「乳清」「豆漿」「燕麥」
+
+    回傳:
+        JSON 字串，含符合的商品清單。
+    """
+    con = _db()
+    rows = con.execute(
+        "SELECT * FROM fitness_product "
+        "WHERE name LIKE ? OR category LIKE ? OR vendor LIKE ? "
+        "ORDER BY protein_g DESC",
+        (f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"),
+    ).fetchall()
+    con.close()
+    products = [
+        {"id": r["id"], "name": r["name"], "vendor": r["vendor"],
+         "category": r["category"], "protein_g": r["protein_g"],
+         "calories": r["calories"], "price": r["price"], "stock": r["stock"]}
+        for r in rows
+    ]
+    return json.dumps(
+        {"count": len(products), "products": products,
+         "message": f"找到 {len(products)} 筆商品。" if products
+                    else f"找不到含「{keyword}」的商品。"},
+        ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# 工具 5：依目標（增肌/減脂）與預算推薦高蛋白商品組合
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def recommend_high_protein(goal: str, budget: int) -> str:
+    """根據使用者的健身目標與採買預算，從統一集團商品中推薦最佳高蛋白採買組合，
+    回傳推薦清單、組合總蛋白質克數與總價格。
+    當使用者說「幫我規劃增肌採買清單」「我有 500 元想買高蛋白食物」
+    「減脂期間買什麼比較好」時，呼叫此工具。
+
+    參數:
+        goal:   健身目標，例如「增肌」或「減脂」
+        budget: 採買預算（台幣整數），例如 500
+
+    回傳:
+        JSON 字串，含推薦商品清單、總蛋白質克數與總花費。
+    """
+    con = _db()
+    if "減脂" in goal or "cut" in goal.lower():
+        # 減脂：蛋白質/熱量比高（熱量效率）且庫存充足
+        rows = con.execute(
+            "SELECT * FROM fitness_product WHERE stock > 0 AND calories > 0 "
+            "ORDER BY CAST(protein_g AS REAL)/calories DESC, price ASC"
+        ).fetchall()
+    else:
+        # 增肌（預設）：單份蛋白質克數高
+        rows = con.execute(
+            "SELECT * FROM fitness_product WHERE stock > 0 "
+            "ORDER BY protein_g DESC, price ASC"
+        ).fetchall()
+    con.close()
+
+    picked, total_price, total_protein = [], 0, 0.0
+    for r in rows:
+        if total_price + r["price"] <= budget:
+            picked.append({
+                "name": r["name"], "vendor": r["vendor"],
+                "protein_g": r["protein_g"], "calories": r["calories"],
+                "price": r["price"],
+            })
+            total_price += r["price"]
+            total_protein += r["protein_g"]
+
+    return json.dumps(
+        {"goal": goal, "budget": budget,
+         "total_price": total_price, "total_protein_g": round(total_protein, 1),
+         "count": len(picked), "products": picked,
+         "message": f"在 {budget} 元預算內，推薦 {len(picked)} 項商品，"
+                    f"合計蛋白質 {round(total_protein, 1)}g，花費 {total_price} 元。"
+                    if picked else "預算不足以購買任何商品，建議提高預算。"},
+        ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# 工具 6：查詢特定商品在各業務的庫存狀況
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def check_inventory(product_name: str) -> str:
+    """查詢某個商品在統一集團各業務（7-11、家樂福、康是美、統一生機）的庫存狀況，
+    回傳哪家有貨、庫存數量為何。
+    當使用者想確認商品是否有庫存、或想比較哪個通路還有貨時，呼叫此工具。
+    例如：「雞胸肉還有庫存嗎」「康是美的乳清剩多少」。
+
+    參數:
+        product_name: 商品名稱或關鍵字，例如「雞胸肉」「乳清蛋白」「豆漿」
+
+    回傳:
+        JSON 字串，含各通路的庫存明細。
+    """
+    con = _db()
+    rows = con.execute(
+        "SELECT name, vendor, stock, price FROM fitness_product "
+        "WHERE name LIKE ? ORDER BY stock DESC",
+        (f"%{product_name}%",),
+    ).fetchall()
+    con.close()
+
+    items = [{"name": r["name"], "vendor": r["vendor"],
+              "stock": r["stock"], "price": r["price"]} for r in rows]
+    in_stock = [i for i in items if i["stock"] > 0]
+
+    return json.dumps(
+        {"query": product_name, "found": len(items), "in_stock": len(in_stock),
+         "items": items,
+         "message": f"找到 {len(items)} 筆，其中 {len(in_stock)} 筆有庫存。"
+                    if items else f"查無「{product_name}」相關商品。"},
+        ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 def _selftest():
     """不啟動 server，直接呼叫三個工具，確認邏輯正確。"""
     print("① get_service_form('我家廚房水管漏水，想找人來修')")
@@ -206,7 +332,28 @@ def _selftest():
                                  district_code="001"))
     for v in m["vendors"]:
         print(f"   → {v['name']} ⭐{v['rating']} {v['phone']}")
-    print("\n✅ 三個工具皆正常。")
+    print("\n④ search_grocery('雞胸')")
+    sg = json.loads(search_grocery("雞胸"))
+    for p in sg["products"]:
+        print(f"   → [{p['vendor']}] {p['name']}  蛋白質{p['protein_g']}g  ${p['price']}  庫存{p['stock']}")
+
+    print("\n⑤ recommend_high_protein(goal='增肌', budget=300)")
+    rp = json.loads(recommend_high_protein("增肌", 300))
+    print(f"   → {rp['message']}")
+    for p in rp["products"]:
+        print(f"      {p['name']} ({p['vendor']}) 蛋白質{p['protein_g']}g ${p['price']}")
+
+    print("\n⑥ recommend_high_protein(goal='減脂', budget=200)")
+    rd = json.loads(recommend_high_protein("減脂", 200))
+    print(f"   → {rd['message']}")
+
+    print("\n⑦ check_inventory('豆漿')")
+    ci = json.loads(check_inventory("豆漿"))
+    print(f"   → {ci['message']}")
+    for i in ci["items"]:
+        print(f"      [{i['vendor']}] {i['name']}  庫存{i['stock']}  ${i['price']}")
+
+    print("\n✅ 六個工具皆正常。")
 
 
 if __name__ == "__main__":
