@@ -1,329 +1,317 @@
 # -*- coding: utf-8 -*-
-"""健身採買助手前端 — streamlit run app.py"""
+"""健身採買助手 — Streamlit + Claude API + MCP Tools"""
 import os
 import json
-import re
-import sqlite3
 import streamlit as st
+import anthropic
 from datetime import datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-DB = os.path.join(_HERE, "butler.db")
-if not os.path.exists(DB):
+DB_PATH = os.path.join(_HERE, "butler.db")
+if not os.path.exists(DB_PATH):
     import seed as _seed
     _seed.main()
 
 from mcp_server import search_grocery, recommend_high_protein, check_inventory
 
-# ── DB helpers ────────────────────────────────────────────────────────────────
-def _db():
-    con = sqlite3.connect(DB)
-    con.row_factory = sqlite3.Row
-    return con
+# ── Claude 工具定義（供 API 用）──────────────────────────────────────────────
+CLAUDE_TOOLS = [
+    {
+        "name": "search_grocery",
+        "description": (
+            "在統一集團各業務（7-11、家樂福、康是美、統一生機）搜尋健身商品。"
+            "當用戶詢問特定商品在哪裡可以買、或想瀏覽某類商品時使用。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "搜尋關鍵字，如：雞胸肉、乳清蛋白、豆漿"},
+            },
+            "required": ["keyword"],
+        },
+    },
+    {
+        "name": "recommend_high_protein",
+        "description": (
+            "根據健身目標（增肌或減脂）與採買預算，推薦最佳高蛋白商品組合。"
+            "只有在用戶明確說出目標 AND 確認預算金額後才呼叫此工具；"
+            "若預算未知，請先詢問用戶。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal":   {"type": "string",  "description": "健身目標：增肌 或 減脂"},
+                "budget": {"type": "integer", "description": "採買預算（台幣整數），如：500"},
+            },
+            "required": ["goal", "budget"],
+        },
+    },
+    {
+        "name": "check_inventory",
+        "description": (
+            "查詢某商品在各通路的庫存狀況。"
+            "當用戶詢問某商品是否有貨、庫存剩多少時使用。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "product_name": {"type": "string", "description": "商品名稱或關鍵字，如：雞胸肉、乳清蛋白"},
+            },
+            "required": ["product_name"],
+        },
+    },
+]
 
-def check_login(username, password):
-    con = _db()
-    row = con.execute(
-        "SELECT * FROM users WHERE username=? AND password=?", (username, password)
-    ).fetchone()
-    con.close()
-    return dict(row) if row else None
-
-def register_user(username, password):
-    try:
-        con = _db()
-        con.execute(
-            "INSERT INTO users (username,password,created_at) VALUES (?,?,?)",
-            (username, password, datetime.now().isoformat()),
-        )
-        con.commit()
-        con.close()
-        return True
-    except Exception:
-        return False
-
-# ── Intent detection（本地關鍵字判斷，不走舊的 service_category）─────────────
-def detect_intent(text: str) -> dict:
-    budget_match = re.search(r"(\d+)\s*元", text)
-    budget = int(budget_match.group(1)) if budget_match else 500
-    keyword = re.sub(r"\d+\s*元", "", text).strip() or text
-
-    if any(kw in text for kw in ["庫存", "還有嗎", "有沒有", "剩多少", "有貨嗎", "還有貨"]):
-        return {"intent": "inventory", "keyword": keyword}
-    if any(kw in text for kw in ["增肌", "長肌肉", "增重", "重訓", "肌力", "練肌"]):
-        return {"intent": "recommend", "goal": "增肌", "budget": budget}
-    if any(kw in text for kw in ["減脂", "減肥", "瘦身", "低熱量", "燃脂", "cut"]):
-        return {"intent": "recommend", "goal": "減脂", "budget": budget}
-    if any(kw in text for kw in ["健身", "運動", "高蛋白", "蛋白質", "補充", "肌肉", "鍛鍊", "體能", "採買", "買"]):
-        return {"intent": "recommend", "goal": "增肌", "budget": budget}
-    return {"intent": "search", "keyword": keyword}
-
-# ── MCP 呼叫包裝（記錄每次工具呼叫）──────────────────────────────────────────
-def call_mcp(tool_name: str, fn, **kwargs) -> dict:
-    ts = datetime.now().strftime("%H:%M:%S")
-    raw = fn(**kwargs)
-    result = json.loads(raw)
-    st.session_state.mcp_log.append(
-        {"tool": tool_name, "params": kwargs, "result": result, "ts": ts}
-    )
-    return result
-
-# ── 常數 ──────────────────────────────────────────────────────────────────────
-VENDOR_COLOR = {
-    "7-11":    "#00833D",
-    "家樂福":  "#0064D2",
-    "康是美":  "#E60012",
-    "統一生機": "#7B5EA7",
+TOOL_FNS = {
+    "search_grocery":         search_grocery,
+    "recommend_high_protein": recommend_high_protein,
+    "check_inventory":        check_inventory,
 }
-CAT_ICON = {
-    "蛋白質": "🥩", "主食": "🍚", "蔬果": "🥦",
-    "乳製品": "🥛", "保健品": "💊", "即食": "🍱",
-}
-TOOL_META = {
-    "search_grocery":        ("🔍", "商品關鍵字搜尋"),
+
+SYSTEM_PROMPT = """\
+你是「健身採買助手」，協助用戶在統一集團旗下各業務採買適合健身的食品與補給品。
+
+## 可用通路
+- 7-11：即食舒肥雞胸、水煮蛋、鮪魚罐頭、無糖豆漿等輕食
+- 家樂福：生鮮雞胸肉、鮭魚、牛腱、希臘優格等生鮮乳製品
+- 康是美：乳清蛋白粉、BCAA、膠原蛋白等保健補充劑
+- 統一生機：燕麥片、黑豆漿、綜合堅果等天然穀物
+
+## 對話規則（重要）
+1. 每次只問一個問題，循序了解需求
+2. 若用戶提到增肌或減脂但未說明預算，一定要先問預算再呼叫工具
+3. 確認目標和預算後，才呼叫 recommend_high_protein
+4. 繁體中文回答，語氣親切自然，適當使用 emoji
+5. 工具回傳結果後，用自然語言整理重點，不要直接輸出 JSON\
+"""
+
+VENDOR_EMOJI = {"7-11": "🟢", "家樂福": "🔵", "康是美": "🔴", "統一生機": "🟣"}
+TOOL_META    = {
+    "search_grocery":         ("🔍", "商品關鍵字搜尋"),
     "recommend_high_protein": ("💪", "高蛋白目標推薦"),
-    "check_inventory":       ("📦", "通路庫存查詢"),
+    "check_inventory":        ("📦", "通路庫存查詢"),
 }
 
-# ── Page config & CSS ─────────────────────────────────────────────────────────
-st.set_page_config(page_title="健身採買助手", page_icon="🏋️", layout="wide")
-st.markdown("""
-<style>
-  .main .block-container { max-width: 720px; padding-top: 2rem; }
-  .t-main { color: #1a1a2e; font-size: 2rem; font-weight: 900; margin-bottom: 0; }
-  .t-sub  { color: #E60012; font-size: 0.9rem; margin-top: 2px; }
-  .summary-box {
-    background: #E8F5E9; border-left: 5px solid #00833D;
-    border-radius: 8px; padding: 14px 18px; margin: 12px 0;
-  }
-  .product-card {
-    background: #F8F9FA; border: 1px solid #E0E0E0;
-    border-radius: 10px; padding: 14px 18px; margin: 8px 0;
-  }
-  .vendor-badge {
-    display: inline-block; border-radius: 4px;
-    padding: 2px 8px; color: white; font-size: 0.78rem; font-weight: 600;
-  }
-  .mcp-card {
-    background: #1E1E2E; color: #CDD6F4;
-    border-radius: 8px; padding: 10px 12px; margin-bottom: 10px;
-    font-size: 0.82rem; font-family: monospace;
-  }
-  .mcp-tool { color: #89B4FA; font-weight: 700; font-size: 0.9rem; }
-  .mcp-ts   { color: #6C7086; font-size: 0.75rem; float: right; }
-  .mcp-label { color: #6C7086; font-size: 0.75rem; }
-  .mcp-param { color: #A6E3A1; }
-  .mcp-ret   { color: #F9E2AF; }
-</style>
-""", unsafe_allow_html=True)
 
-# ── Session defaults ───────────────────────────────────────────────────────────
+# ── Claude 呼叫（含 tool use 循環）──────────────────────────────────────────
+def _content_to_dict(content) -> list:
+    """把 SDK ContentBlock 物件轉成可序列化的 dict，存入 session_state。"""
+    out = []
+    for b in content:
+        if b.type == "text":
+            out.append({"type": "text", "text": b.text})
+        elif b.type == "tool_use":
+            out.append({"type": "tool_use", "id": b.id,
+                        "name": b.name, "input": b.input})
+    return out
+
+
+def chat_with_claude(claude_msgs: list, api_key: str):
+    """
+    執行 Claude 對話 + tool use 循環。
+    回傳 (final_text: str, tool_log: list, updated_claude_msgs: list)。
+    """
+    client = anthropic.Anthropic(api_key=api_key)
+    msgs   = list(claude_msgs)
+    log    = []
+
+    while True:
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=SYSTEM_PROMPT,
+            tools=CLAUDE_TOOLS,
+            messages=msgs,
+        )
+
+        if resp.stop_reason != "tool_use":
+            text = "".join(b.text for b in resp.content if b.type == "text")
+            msgs.append({"role": "assistant",
+                         "content": _content_to_dict(resp.content)})
+            return text, log, msgs
+
+        # ── 有 tool_use：把 assistant 回應存進 msgs ──────────────────────────
+        msgs.append({"role": "assistant",
+                     "content": _content_to_dict(resp.content)})
+
+        # 執行每個工具，收集結果
+        tool_results = []
+        for b in resp.content:
+            if b.type != "tool_use":
+                continue
+            result_str  = TOOL_FNS[b.name](**b.input)
+            result_dict = json.loads(result_str)
+            log.append({
+                "tool":   b.name,
+                "params": b.input,
+                "result": result_dict,
+                "ts":     datetime.now().strftime("%H:%M:%S"),
+            })
+            tool_results.append({
+                "type":        "tool_result",
+                "tool_use_id": b.id,
+                "content":     result_str,
+            })
+
+        msgs.append({"role": "user", "content": tool_results})
+        # 繼續循環，讓 Claude 整理工具結果後給出最終回覆
+
+
+# ── 商品結果渲染（純原生 Streamlit 元件，避免 unsafe_allow_html 引發 DOM 錯誤）
+def render_tool_results(tool_calls: list):
+    for tc in tool_calls:
+        tool   = tc["tool"]
+        result = tc["result"]
+        icon, label = TOOL_META.get(tool, ("🔧", tool))
+
+        with st.expander(f"{icon} {label} — {result.get('message', '')}", expanded=True):
+            products = result.get("products") or result.get("items", [])
+            if not products:
+                st.info(result.get("message", "無結果"))
+                continue
+
+            if tool == "recommend_high_protein":
+                c1, c2, c3 = st.columns(3)
+                c1.metric("推薦商品數", f"{result.get('count', 0)} 項")
+                c2.metric("合計蛋白質", f"{result.get('total_protein_g', 0)} g")
+                c3.metric("花費",       f"${result.get('total_price', 0)}")
+                st.divider()
+
+            for p in products:
+                vendor = p.get("vendor", "")
+                stock  = p.get("stock", 0)
+                emoji  = VENDOR_EMOJI.get(vendor, "⚪")
+                status = f"庫存 {stock}" if stock > 0 else "❌ 售完"
+                st.markdown(
+                    f"**{emoji} {p.get('name', '')}** &nbsp;`{vendor}`  \n"
+                    f"🥩 {p.get('protein_g', 0)} g蛋白質 ｜ "
+                    f"🔥 {p.get('calories', 0)} kcal ｜ "
+                    f"💰 **${p.get('price', 0)}** ｜ "
+                    f"📦 {status}"
+                )
+
+
+# ── Page config ────────────────────────────────────────────────────────────────
+st.set_page_config(page_title="健身採買助手", page_icon="🏋️", layout="wide")
+
+# ── Session 初始化 ─────────────────────────────────────────────────────────────
 for k, v in {
-    "stage": "login", "user_id": None, "username": "",
-    "result": None, "intent": None, "mcp_log": [],
+    "display_msgs": [],   # 顯示用
+    "claude_msgs":  [],   # 送給 Claude API 用
+    "mcp_log":      [],
+    "api_key":      os.environ.get("ANTHROPIC_API_KEY", ""),
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ── Sidebar：MCP 工具呼叫紀錄 ──────────────────────────────────────────────────
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    if st.session_state.user_id:
-        col_u, col_out = st.columns([3, 1])
-        col_u.markdown(f"👤 **{st.session_state.username}**")
-        if col_out.button("登出", key="logout"):
-            for k in list(st.session_state.keys()):
-                del st.session_state[k]
-            st.rerun()
-        st.divider()
+    st.markdown("## ⚙️ 設定")
 
+    if not st.session_state.api_key:
+        entered = st.text_input("Anthropic API Key", type="password",
+                                placeholder="sk-ant-api03-...")
+        if entered.strip():
+            st.session_state.api_key = entered.strip()
+            st.rerun()
+    else:
+        st.success("✅ API Key 已設定")
+        if st.button("清除 Key"):
+            st.session_state.api_key = ""
+            st.rerun()
+
+    st.divider()
     st.markdown("## 🔌 MCP 工具呼叫紀錄")
-    st.caption("每次查詢即時顯示 AI 呼叫了哪個工具")
+    st.caption("Claude 每次決定呼叫工具都顯示在此")
     st.divider()
 
     if not st.session_state.mcp_log:
-        st.markdown(
-            "<div style='color:#888;font-size:0.85rem;text-align:center;padding:20px 0'>"
-            "尚未呼叫任何工具<br/>請在左側輸入需求</div>",
-            unsafe_allow_html=True,
-        )
+        st.caption("尚未呼叫任何工具")
     else:
         for entry in reversed(st.session_state.mcp_log):
             icon, label = TOOL_META.get(entry["tool"], ("🔧", entry["tool"]))
-            params_str = "  ".join(f"{k}={v}" for k, v in entry["params"].items())
-            msg = entry["result"].get("message", "")
-            st.markdown(f"""
-            <div class="mcp-card">
-              <span class="mcp-tool">{icon} {entry['tool']}</span>
-              <span class="mcp-ts">{entry['ts']}</span><br/>
-              <span class="mcp-label">{label}</span>
-              <br/><br/>
-              <span class="mcp-param">▶ 輸入<br/>{params_str}</span>
-              <br/><br/>
-              <span class="mcp-ret">◀ 回傳<br/>{msg}</span>
-            </div>
-            """, unsafe_allow_html=True)
-            with st.expander("完整 JSON"):
-                st.json({"params": entry["params"], "result": entry["result"]})
+            with st.container(border=True):
+                st.caption(f"{icon} **{entry['tool']}** · `{entry['ts']}`")
+                st.caption(label)
+                params_str = "  ".join(f"{k}={v}" for k, v in entry["params"].items())
+                st.code(params_str, language=None)
+                with st.expander("完整 JSON"):
+                    st.json({"params": entry["params"], "result": entry["result"]})
 
+        st.divider()
         if st.button("清除紀錄", use_container_width=True):
             st.session_state.mcp_log = []
             st.rerun()
 
 # ── Header ─────────────────────────────────────────────────────────────────────
-st.markdown('<p class="t-main">🏋️ 健身採買助手</p>', unsafe_allow_html=True)
-st.markdown(
-    '<p class="t-sub">統一集團 × AI ✦ 7-11・家樂福・康是美・統一生機</p>',
-    unsafe_allow_html=True,
-)
+col_title, col_reset = st.columns([5, 1])
+col_title.markdown("## 🏋️ 健身採買助手")
+col_title.caption("統一集團 × Claude AI ✦ 7-11・家樂福・康是美・統一生機")
+
+if col_reset.button("🗑️ 清空對話"):
+    st.session_state.display_msgs = []
+    st.session_state.claude_msgs  = []
+    st.session_state.mcp_log      = []
+    st.rerun()
+
 st.divider()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STAGE: LOGIN
-# ══════════════════════════════════════════════════════════════════════════════
-if st.session_state.stage == "login":
-    _, center, _ = st.columns([1, 2, 1])
-    with center:
-        st.markdown("### 👤 歡迎使用健身採買助手")
-        st.markdown("登入以使用完整功能")
-        st.markdown("")
-        tab_login, tab_reg = st.tabs(["登入", "📝 新用戶註冊"])
+# 未設 API Key 時擋住
+if not st.session_state.api_key:
+    st.warning("⚠️ 請先在左側側欄輸入 Anthropic API Key 才能開始對話。")
+    st.stop()
 
-        with tab_login:
-            u = st.text_input("帳號", key="li_u", placeholder="請輸入帳號")
-            p = st.text_input("密碼", type="password", key="li_p", placeholder="請輸入密碼")
-            if st.button("登入", type="primary", use_container_width=True, key="btn_login"):
-                user = check_login(u.strip(), p.strip())
-                if user:
-                    st.session_state.user_id  = user["id"]
-                    st.session_state.username = user["username"]
-                    st.session_state.stage    = "input"
-                    st.rerun()
-                else:
-                    st.error("帳號或密碼錯誤，請再試一次。")
+# ── 1. 顯示歷史訊息 ────────────────────────────────────────────────────────────
+for msg in st.session_state.display_msgs:
+    avatar = "👤" if msg["role"] == "user" else "🏋️"
+    with st.chat_message(msg["role"], avatar=avatar):
+        st.markdown(msg["content"])
+        if msg.get("tool_calls"):
+            render_tool_results(msg["tool_calls"])
 
-        with tab_reg:
-            ru = st.text_input("設定帳號", key="reg_u", placeholder="請輸入帳號")
-            rp = st.text_input("設定密碼", type="password", key="reg_p", placeholder="至少 4 個字元")
-            if st.button("註冊並登入", type="primary", use_container_width=True, key="btn_reg"):
-                if len(ru.strip()) < 2:
-                    st.error("帳號至少 2 個字元。")
-                elif len(rp.strip()) < 4:
-                    st.error("密碼至少 4 個字元。")
-                elif register_user(ru.strip(), rp.strip()):
-                    user = check_login(ru.strip(), rp.strip())
-                    st.session_state.user_id  = user["id"]
-                    st.session_state.username = user["username"]
-                    st.session_state.stage    = "input"
-                    st.rerun()
-                else:
-                    st.error("此帳號已被使用，請換一個帳號。")
+# ── 2. 無歷史時顯示歡迎語（不存入 session，避免重複渲染）────────────────────
+if not st.session_state.display_msgs:
+    with st.chat_message("assistant", avatar="🏋️"):
+        st.markdown(
+            "你好！我是健身採買助手 💪\n\n"
+            "我可以幫你在 **7-11、家樂福、康是美、統一生機** 找到適合健身的食品與補給品。\n\n"
+            "請問你最近的健身目標是什麼呢？或是有想找的特定商品嗎？"
+        )
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STAGE: INPUT
-# ══════════════════════════════════════════════════════════════════════════════
-elif st.session_state.stage == "input":
-    st.markdown("#### 💬 請告訴我您的健身目標或想找的商品")
-    st.caption(
-        "試試看：`我最近想健身` ✦ `增肌預算500元` ✦ `幫我規劃減脂採買` ✦ "
-        "`找雞胸肉` ✦ `乳清蛋白還有庫存嗎`"
-    )
+# ── 3. 接收新輸入 ──────────────────────────────────────────────────────────────
+if prompt := st.chat_input("輸入您的健身需求或問題..."):
+    # 顯示用戶訊息
+    with st.chat_message("user", avatar="👤"):
+        st.markdown(prompt)
 
-    user_text = st.text_area(
-        "需求描述", placeholder="輸入您的需求...",
-        height=90, label_visibility="collapsed", key="ui_text",
-    )
-    col_go, _ = st.columns([2, 5])
-    go = col_go.button("開始搜尋 →", type="primary", use_container_width=True)
+    # 更新 claude_msgs（只供 API 用）
+    st.session_state.claude_msgs.append({"role": "user", "content": prompt})
 
-    if go:
-        text = user_text.strip()
-        if not text:
-            st.warning("請輸入您的需求描述。")
-        else:
-            intent = detect_intent(text)
-            with st.spinner("🤖 AI 分析中，呼叫 MCP 工具..."):
-                if intent["intent"] == "inventory":
-                    result = call_mcp("check_inventory", check_inventory,
-                                     product_name=intent["keyword"])
-                elif intent["intent"] == "recommend":
-                    result = call_mcp("recommend_high_protein", recommend_high_protein,
-                                     goal=intent["goal"], budget=intent["budget"])
-                else:
-                    result = call_mcp("search_grocery", search_grocery,
-                                     keyword=intent["keyword"])
-            result["_intent"] = intent["intent"]
-            result["_intent_meta"] = intent
-            st.session_state.result = result
-            st.session_state.stage  = "result"
-            st.rerun()
+    # 呼叫 Claude（含 tool use 循環）
+    with st.chat_message("assistant", avatar="🏋️"):
+        with st.spinner("🤔 思考中..."):
+            try:
+                final_text, tool_calls, updated_msgs = chat_with_claude(
+                    st.session_state.claude_msgs,
+                    st.session_state.api_key,
+                )
+                st.session_state.claude_msgs = updated_msgs
+            except anthropic.AuthenticationError:
+                st.error("❌ API Key 無效，請重新設定。")
+                st.stop()
+            except Exception as exc:
+                st.error(f"❌ 發生錯誤：{exc}")
+                st.stop()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STAGE: RESULT
-# ══════════════════════════════════════════════════════════════════════════════
-elif st.session_state.stage == "result":
-    result = st.session_state.result
-    intent_type = result.get("_intent", "search")
-    meta        = result.get("_intent_meta", {})
+        st.markdown(final_text)
+        if tool_calls:
+            render_tool_results(tool_calls)
 
-    if st.button("← 重新查詢"):
-        st.session_state.stage  = "input"
-        st.session_state.result = None
-        st.rerun()
-
-    # ── 結果標題 ────────────────────────────────────────────────────────────
-    if intent_type == "recommend":
-        goal   = meta.get("goal", "增肌")
-        budget = meta.get("budget", 500)
-        st.markdown(f"""
-        <div class="summary-box">
-          <strong>💪 {goal} 採買推薦</strong><br/>
-          預算 <strong>{budget} 元</strong> ／
-          推薦 <strong>{result.get('count', 0)} 項</strong> ／
-          合計蛋白質 <strong>{result.get('total_protein_g', 0)} g</strong> ／
-          花費 <strong>{result.get('total_price', 0)} 元</strong>
-        </div>
-        """, unsafe_allow_html=True)
-        products = result.get("products", [])
-
-    elif intent_type == "inventory":
-        st.markdown(f"### 📦 庫存查詢")
-        st.caption(result.get("message", ""))
-        products = result.get("items", [])
-
-    else:
-        st.markdown(f"### 🔍 搜尋結果")
-        st.caption(result.get("message", ""))
-        products = result.get("products", [])
-
-    # ── 商品清單 ────────────────────────────────────────────────────────────
-    if not products:
-        st.info("😔 " + result.get("message", "找不到符合的商品，請換個關鍵字試試。"))
-    else:
-        for p in products:
-            vendor     = p.get("vendor", "")
-            color      = VENDOR_COLOR.get(vendor, "#888")
-            cat_icon   = CAT_ICON.get(p.get("category", ""), "📦")
-            stock      = p.get("stock", 0)
-            stock_str  = f"庫存 {stock}" if stock > 0 else "❌ 已售完"
-            stock_color = "#E53935" if stock == 0 else ("#FF9800" if stock <= 30 else "#43A047")
-
-            st.markdown(f"""
-            <div class="product-card">
-              <span class="vendor-badge" style="background:{color}">{vendor}</span>
-              &nbsp;{cat_icon}&nbsp;
-              <strong style="font-size:1.05rem">{p.get('name','')}</strong>
-              <br/>
-              <span style="color:#555;font-size:0.9rem">
-                🥩 蛋白質 <strong>{p.get('protein_g', 0)}g</strong> &nbsp;&nbsp;
-                🔥 熱量 <strong>{p.get('calories', 0)} kcal</strong> &nbsp;&nbsp;
-                💰 <strong>${p.get('price', 0)}</strong> &nbsp;&nbsp;
-                <span style="color:{stock_color}">📦 {stock_str}</span>
-              </span>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.markdown("")
-    if st.button("← 返回首頁", type="primary"):
-        st.session_state.stage  = "input"
-        st.session_state.result = None
-        st.rerun()
+    # 存入 display_msgs（供下次渲染用）
+    st.session_state.display_msgs.append({"role": "user", "content": prompt})
+    st.session_state.display_msgs.append({
+        "role":       "assistant",
+        "content":    final_text,
+        "tool_calls": tool_calls,
+    })
+    st.session_state.mcp_log.extend(tool_calls)
