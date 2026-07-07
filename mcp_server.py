@@ -19,10 +19,32 @@ DB = os.path.join(os.path.dirname(__file__), "butler.db")
 mcp = FastMCP("fitness-grocery")
 
 
+def _ensure_schema():
+    """既有 DB 缺少新欄位時自動補上（schema migration，不刪資料）。"""
+    con = _db()
+    cols = {row[1] for row in con.execute("PRAGMA table_info(inquiry)")}
+    for col, defn in [
+        ("vendor_reply", "TEXT NOT NULL DEFAULT ''"),
+        ("accepted_at",  "TEXT NOT NULL DEFAULT ''"),
+        ("delivery_no",  "TEXT NOT NULL DEFAULT ''"),
+    ]:
+        if col not in cols:
+            con.execute(f"ALTER TABLE inquiry ADD COLUMN {col} {defn}")
+    con.commit()
+    con.close()
+
+
 def _db():
     con = sqlite3.connect(DB)
     con.row_factory = sqlite3.Row
     return con
+
+
+# 模組匯入時自動執行 schema migration（不影響現有資料）
+try:
+    _ensure_schema()
+except Exception:
+    pass  # inquiry 表可能還不存在（seed 前），忽略
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +208,59 @@ def submit_inquiry(goal: str, contact_name: str, contact_phone: str,
 
 
 # ---------------------------------------------------------------------------
+# 工具 5：後台接單並派送外送服務（寫入操作，由後台人員確認後呼叫）
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def dispatch_delivery(inquiry_no: str, vendor_name: str,
+                      estimated_minutes: int = 60, reply_message: str = "") -> str:
+    """後台人員確認接受採買諮詢單後，建立外送配送訂單並更新諮詢單狀態。
+
+    【重要】這是寫入操作，必須由後台人員在後台介面確認接單後才能呼叫。
+    呼叫後將：
+    1. 產生外送單號（DL...）
+    2. 將諮詢單狀態改為「配送中」
+    3. 記錄接單廠商、回覆訊息與接單時間
+
+    參數:
+        inquiry_no:        諮詢單編號，例如「IQ260708XXXXXX」
+        vendor_name:       接單廠商或門市，例如「家樂福信義店」
+        estimated_minutes: 預計送達分鐘數，預設 60
+        reply_message:     廠商給用戶的回覆訊息（選填）
+
+    回傳:
+        JSON 字串，含外送單號 delivery_no。
+    """
+    delivery_no = "DL" + datetime.now().strftime("%y%m%d") + uuid.uuid4().hex[:6].upper()
+    now_iso     = datetime.now().isoformat()
+    stored_reply = f"[{vendor_name}] {reply_message}".strip()
+
+    con = _db()
+    con.execute(
+        "UPDATE inquiry "
+        "SET status='配送中', accepted_at=?, delivery_no=?, vendor_reply=? "
+        "WHERE inquiry_no=?",
+        (now_iso, delivery_no, stored_reply, inquiry_no),
+    )
+    con.commit()
+    con.close()
+
+    return json.dumps(
+        {
+            "success":           True,
+            "delivery_no":       delivery_no,
+            "inquiry_no":        inquiry_no,
+            "vendor_name":       vendor_name,
+            "estimated_minutes": estimated_minutes,
+            "message": (
+                f"🚚 外送單 {delivery_no} 已建立！"
+                f"{vendor_name} 預計 {estimated_minutes} 分鐘內送達。"
+            ),
+        },
+        ensure_ascii=False,
+    )
+
+
+# ---------------------------------------------------------------------------
 def _selftest():
     """不啟動 server，直接呼叫三個工具，確認邏輯正確。"""
     print("① search_grocery('雞胸')")
@@ -212,12 +287,21 @@ def _selftest():
         print(f"      [{i['vendor']}] {i['name']}  庫存{i['stock']}  ${i['price']}")
 
     print("\n⑤ submit_inquiry(goal='增肌', contact_name='測試用戶', contact_phone='0912345678', budget=300)")
-    r = json.loads(submit_inquiry(
+    r5 = json.loads(submit_inquiry(
         goal="增肌", contact_name="測試用戶",
         contact_phone="0912345678", budget=300, note="selftest"))
-    print(f"   → {r['message']}")
+    print(f"   → {r5['message']}")
 
-    print("\n✅ 四個工具皆正常。")
+    print(f"\n⑥ dispatch_delivery(inquiry_no='{r5['inquiry_no']}', vendor_name='家樂福信義店', estimated_minutes=45)")
+    r6 = json.loads(dispatch_delivery(
+        inquiry_no=r5["inquiry_no"],
+        vendor_name="家樂福信義店",
+        estimated_minutes=45,
+        reply_message="已為您準備商品，預計45分鐘內送達。"))
+    print(f"   → {r6['message']}")
+    print(f"   外送單號：{r6['delivery_no']}")
+
+    print("\n✅ 五個工具皆正常。")
 
 
 if __name__ == "__main__":
