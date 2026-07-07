@@ -11,6 +11,8 @@ import sqlite3
 import os
 import sys
 import json
+import uuid
+from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 
 DB = os.path.join(os.path.dirname(__file__), "butler.db")
@@ -140,6 +142,50 @@ def check_inventory(product_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 工具 4：建立健身採買諮詢單（寫入操作，必須使用者確認後才能呼叫）
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def submit_inquiry(goal: str, contact_name: str, contact_phone: str,
+                   budget: int = 0, keyword: str = "", note: str = "") -> str:
+    """將使用者的健身採買需求寫入後台諮詢單，讓後台人員可以跟進與協助。
+
+    【重要】這是寫入操作。呼叫此工具前，必須已明確告知使用者
+    「我將要幫您建立採買諮詢單」並獲得其口頭確認，才能執行。
+
+    當使用者：
+    - 明確說「好」「可以」「幫我建立」「記錄一下」等同意語句後
+    呼叫此工具。若使用者未明確同意，禁止呼叫。
+
+    參數:
+        goal:          健身目標，例如「增肌」「減脂」「搜尋商品」
+        contact_name:  聯絡人姓名
+        contact_phone: 聯絡電話
+        budget:        採買預算（選填，無則為 0）
+        keyword:       搜尋關鍵字（選填）
+        note:          備註（選填）
+
+    回傳:
+        JSON 字串，含諮詢單編號 inquiry_no。
+    """
+    inquiry_no = "IQ" + datetime.now().strftime("%y%m%d") + uuid.uuid4().hex[:6].upper()
+    con = _db()
+    con.execute(
+        "INSERT INTO inquiry "
+        "(inquiry_no,goal,budget,keyword,contact_name,contact_phone,note,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (inquiry_no, goal, budget, keyword,
+         contact_name, contact_phone, note, datetime.now().isoformat()),
+    )
+    con.commit()
+    con.close()
+    return json.dumps(
+        {"success": True, "inquiry_no": inquiry_no,
+         "message": f"諮詢單 {inquiry_no} 已建立！後台人員將主動與您聯繫。"},
+        ensure_ascii=False,
+    )
+
+
+# ---------------------------------------------------------------------------
 def _selftest():
     """不啟動 server，直接呼叫三個工具，確認邏輯正確。"""
     print("① search_grocery('雞胸')")
@@ -165,7 +211,13 @@ def _selftest():
     for i in r["items"]:
         print(f"      [{i['vendor']}] {i['name']}  庫存{i['stock']}  ${i['price']}")
 
-    print("\n✅ 三個工具皆正常。")
+    print("\n⑤ submit_inquiry(goal='增肌', contact_name='測試用戶', contact_phone='0912345678', budget=300)")
+    r = json.loads(submit_inquiry(
+        goal="增肌", contact_name="測試用戶",
+        contact_phone="0912345678", budget=300, note="selftest"))
+    print(f"   → {r['message']}")
+
+    print("\n✅ 四個工具皆正常。")
 
 
 if __name__ == "__main__":
