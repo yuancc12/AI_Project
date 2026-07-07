@@ -12,6 +12,7 @@ DB = os.path.join(os.path.dirname(__file__), "butler.db")
 SCHEMA = """
 DROP TABLE IF EXISTS fitness_product;
 DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS inquiry;
 
 CREATE TABLE fitness_product (
     id         INTEGER PRIMARY KEY,
@@ -29,6 +30,20 @@ CREATE TABLE users (
     username   TEXT UNIQUE NOT NULL,
     password   TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+
+-- 健身採買諮詢單（submit_inquiry 寫入此表）
+CREATE TABLE inquiry (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    inquiry_no    TEXT UNIQUE NOT NULL,
+    goal          TEXT,          -- 增肌 / 減脂 / 搜尋
+    budget        INTEGER DEFAULT 0,
+    keyword       TEXT,
+    contact_name  TEXT,
+    contact_phone TEXT,
+    note          TEXT,
+    status        TEXT NOT NULL DEFAULT '待處理',
+    created_at    TEXT NOT NULL
 );
 """
 
@@ -81,7 +96,7 @@ def main():
     )
     con.commit()
 
-    for t in ["fitness_product", "users"]:
+    for t in ["fitness_product", "users", "inquiry"]:
         n = cur.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
         print(f"  {t:<22} {n} 筆")
     con.close()
