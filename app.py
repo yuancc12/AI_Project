@@ -1409,6 +1409,12 @@ elif st.session_state.stage == "inquiry_form":
                               value=prefill.get("contact_phone", "") or st.session_state.get("user_contact_phone", ""),
                               key="form_phone")
         note  = st.text_area("📝 備註", value=prefill.get("note", ""), height=80, key="form_note")
+        uploaded_imgs = st.file_uploader(
+            "📷 上傳照片（選填，可多張）",
+            type=["jpg", "jpeg", "png", "webp"],
+            accept_multiple_files=True,
+            key="form_images",
+        )
         address = st.text_input(
             "📍 服務／配送地址 *",
             value=prefill.get("address", "") or st.session_state.get("user_address", ""),
@@ -1463,6 +1469,19 @@ elif st.session_state.stage == "inquiry_form":
                 products_json_str = json.dumps(selected_products, ensure_ascii=False) if selected_products else ""
                 kw = prefill.get("keyword", "")
 
+                # 儲存上傳圖片到本地 uploads/ 目錄
+                import uuid as _uuid, os as _os
+                _img_paths = []
+                if uploaded_imgs:
+                    _os.makedirs("uploads", exist_ok=True)
+                    for _f in uploaded_imgs:
+                        _ext = _f.name.rsplit(".", 1)[-1].lower() if "." in _f.name else "jpg"
+                        _fname = f"{datetime.now().strftime('%Y%m%d')}_{_uuid.uuid4().hex[:8]}.{_ext}"
+                        _fpath = f"uploads/{_fname}"
+                        with open(_fpath, "wb") as _out:
+                            _out.write(_f.read())
+                        _img_paths.append(_fpath)
+
                 params = {
                     "goal":          goal,
                     "contact_name":  name.strip(),
@@ -1473,6 +1492,7 @@ elif st.session_state.stage == "inquiry_form":
                     "address":       address or "",
                     "products_json": products_json_str,
                     "user_id":       st.session_state.get("user_id") or 0,
+                    "images_json":   json.dumps(_img_paths, ensure_ascii=False),
                 }
                 result = _run_async(_submit_inquiry_via_mcp(params))
 

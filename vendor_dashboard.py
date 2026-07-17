@@ -5,6 +5,7 @@ vendor_dashboard.py — 健康採買後台 Streamlit UI
 """
 import streamlit as st
 import json
+import os
 import contextlib
 from datetime import datetime
 
@@ -352,6 +353,21 @@ with (tab2 if tab2 is not None else _null):
                             f"🚚 **{_d['vendor_name']}** ｜ 外送單：`{_d['order_no']}`"
                             f"{_dco_part}{_trk_part}　｜　預計 {_eta} 送達"
                         )
+
+                # ── 用戶上傳照片 ─────────────────────────────────────────────
+                _imgs = []
+                try:
+                    _imgs = json.loads(inq.get("images_json", "[]") or "[]")
+                except Exception:
+                    pass
+                if _imgs:
+                    with st.expander(f"📷 用戶上傳照片（{len(_imgs)} 張）", expanded=True):
+                        _icols = st.columns(min(len(_imgs), 3))
+                        for _ii, _ip in enumerate(_imgs):
+                            if os.path.exists(_ip):
+                                _icols[_ii % 3].image(_ip, use_container_width=True)
+                            else:
+                                _icols[_ii % 3].caption(f"📎 {_ip}")
 
                 # ── 雙向訊息紀錄 ─────────────────────────────────────────────
                 _v_lines = [l.strip() for l in inq.get("vendor_reply", "").split("\n") if l.strip()]
