@@ -85,9 +85,21 @@ uv pip install -r requirements.txt
 |---|---|---|
 | `search_grocery` | 讀取 | 依關鍵字搜尋商品 |
 | `recommend_high_protein` | 讀取 | 依目標與預算推薦高蛋白品項 |
-| `check_inventory` | 讀取 | 查詢商品庫存 |
-| `submit_inquiry` | 寫入 | 建立採買諮詢單 |
-| `dispatch_delivery` | 寫入 | 廠商接單並派送 |
+| `check_inventory` | 讀取 | 查詢指定商品庫存數量 |
+| `submit_inquiry` | 寫入 | 建立採買諮詢單（含聯絡資料） |
+| `dispatch_delivery` | 寫入 | 廠商接單並安排外送派送 |
+| `find_route` | 讀取 | 多站點路線規劃（含距離與預估時間） |
+| `get_current_time` | 讀取 | 取得目前日期與時間 |
+| `get_weather` | 讀取 | 查詢指定城市或座標的天氣 |
+| `find_nearby_stores` | 讀取 | 搜尋附近 7-ELEVEN 或合作門市 |
+| `search_recipe` | 讀取 | 依關鍵字或食材搜尋食譜 |
+| `analyze_meal_nutrition` | 讀取 | 分析食物的熱量與蛋白質含量 |
+| `recommend_after_meal` | 讀取 | 根據已攝取熱量推薦餐後補充品 |
+| `calculate_tdee` | 讀取 | 依體重、身高、年齡、活動量計算每日熱量需求 |
+| `get_gym_courses` | 讀取 | 查詢健身課程時刻表 |
+| `get_partner_vendors` | 讀取 | 查詢合作廠商清單（可依分類與地區篩選） |
+| `enroll_gym_course` | 寫入 | 報名健身課程 |
+| `find_sports_venues` | 讀取 | 搜尋附近運動場地 |
 
 ---
 
