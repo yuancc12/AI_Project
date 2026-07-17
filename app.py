@@ -1,182 +1,252 @@
 # -*- coding: utf-8 -*-
-"""健身採買助手 — 登入 + Claude API + MCP Tools（含寫入確認）"""
+"""7-ELEVEN 生活管家 — 登入 + Claude API + 真實 MCP 工具呼叫"""
 import os
 import json
-import sqlite3
+import asyncio
 import streamlit as st
 import anthropic
 from datetime import datetime
+from app_helpers import (
+    DB_PATH, _db,
+    check_login, register_user, get_my_inquiries, update_user_reply,
+    delete_conversation, rename_conversation,
+    _ensure_conversation_table, _ensure_users_schema,
+    get_conversations, load_conv_from_db, save_conv_to_db,
+    _content_to_dict, _run_async, _strip_images, _compact_history, _sanitize_for_openai,
+    CLAUDE_TOOLS, TOOL_FNS, SYSTEM_PROMPT,
+    OLLAMA_MODEL, _ollama, _mcp,
+    get_counties, get_districts,
+)
+from mcp import Client
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(_HERE, "butler.db")
-if not os.path.exists(DB_PATH):
-    import seed as _seed
-    _seed.main()
 
-from mcp_server import (
-    search_grocery, recommend_high_protein,
-    check_inventory, submit_inquiry,
-)
+# ── API 金鑰注入（優先順序：st.secrets > .env > 系統環境變數）──────────────────
+# 1. Streamlit secrets（.streamlit/secrets.toml）
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str):
+            os.environ.setdefault(_k, _v)
+except Exception:
+    pass
 
-# ── DB / 帳號 helpers ─────────────────────────────────────────────────────────
-def _db():
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
-    return con
+# 2. .env 檔案（手動讀，不依賴 dotenv）
+_env_file = os.path.join(_HERE, ".env")
+if os.path.exists(_env_file):
+    with open(_env_file, encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
 
-def check_login(username, password):
-    con = _db()
-    row = con.execute(
-        "SELECT * FROM users WHERE username=? AND password=?",
-        (username, password),
-    ).fetchone()
-    con.close()
-    return dict(row) if row else None
+try:
+    from streamlit_js_eval import get_geolocation as _get_geolocation
+    _HAS_GEO = True
+except ImportError:
+    _HAS_GEO = False
 
-def register_user(username, password):
-    try:
-        con = _db()
-        con.execute(
-            "INSERT INTO users (username,password,created_at) VALUES (?,?,?)",
-            (username, password, datetime.now().isoformat()),
-        )
-        con.commit(); con.close(); return True
-    except Exception:
-        return False
+@st.dialog("🗑️ 確認刪除對話")
+def _delete_confirm_dialog(conv_id: int, title: str):
+    st.write(f"確定要刪除「**{title[:24]}**」嗎？")
+    st.caption("刪除後無法復原。")
+    c1, c2 = st.columns(2)
+    if c1.button("刪除", type="primary", use_container_width=True, key="dlg_del_yes"):
+        delete_conversation(conv_id)
+        if conv_id == st.session_state.get("conversation_id"):
+            st.session_state.update({
+                "display_msgs": [], "ollama_history": [], "claude_msgs": [],
+                "mcp_log": [], "last_products": [], "conversation_id": None,
+            })
+        st.session_state._pending_delete_id = None
+        st.rerun()
+    if c2.button("取消", use_container_width=True, key="dlg_del_no"):
+        st.session_state._pending_delete_id = None
+        st.rerun()
 
-# ── Claude 工具定義 ───────────────────────────────────────────────────────────
-CLAUDE_TOOLS = [
+
+OLLAMA_TOOLS = [
     {
-        "name": "search_grocery",
-        "description": (
-            "在統一集團各業務（7-11、家樂福、康是美、統一生機）搜尋健身商品。"
-            "當用戶詢問特定商品在哪裡可以買到，或想瀏覽某類商品時使用。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "keyword": {"type": "string", "description": "搜尋關鍵字，如：雞胸肉、乳清蛋白"},
-            },
-            "required": ["keyword"],
+        "type": "function",
+        "function": {
+            "name": t["name"],
+            "description": t["description"],
+            "parameters": t["input_schema"],
         },
-    },
-    {
-        "name": "recommend_high_protein",
-        "description": (
-            "根據健身目標（增肌或減脂）與採買預算，推薦高蛋白商品組合。"
-            "只有在確認用戶的目標（增肌/減脂）AND 預算金額後才呼叫；"
-            "若預算不明，必須先詢問。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "goal":   {"type": "string",  "description": "健身目標：增肌 或 減脂"},
-                "budget": {"type": "integer", "description": "採買預算（台幣），如：500"},
-            },
-            "required": ["goal", "budget"],
-        },
-    },
-    {
-        "name": "check_inventory",
-        "description": (
-            "查詢某商品在各通路的庫存狀況。"
-            "當用戶詢問某商品是否有貨、庫存剩多少時使用。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "product_name": {"type": "string", "description": "商品名稱或關鍵字"},
-            },
-            "required": ["product_name"],
-        },
-    },
-    {
-        "name": "submit_inquiry",
-        "description": (
-            "【寫入工具】建立健身採買諮詢單，將用戶需求記錄到後台。"
-            "這是寫入操作，必須嚴格遵守：\n"
-            "1. 展示完商品後，主動詢問用戶是否需要建立諮詢單\n"
-            "2. 用戶明確同意後，收集聯絡姓名和電話\n"
-            "3. 收集完後再次告知「即將建立諮詢單」並確認\n"
-            "4. 獲得最終確認後才呼叫此工具\n"
-            "嚴禁在用戶未同意的情況下呼叫。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "goal":          {"type": "string",  "description": "健身目標"},
-                "contact_name":  {"type": "string",  "description": "聯絡人姓名"},
-                "contact_phone": {"type": "string",  "description": "聯絡電話"},
-                "budget":        {"type": "integer", "description": "採買預算（選填）"},
-                "keyword":       {"type": "string",  "description": "搜尋關鍵字（選填）"},
-                "note":          {"type": "string",  "description": "備註（選填）"},
-            },
-            "required": ["goal", "contact_name", "contact_phone"],
-        },
-    },
+    }
+    for t in CLAUDE_TOOLS
 ]
 
-TOOL_FNS = {
-    "search_grocery":         search_grocery,
-    "recommend_high_protein": recommend_high_protein,
-    "check_inventory":        check_inventory,
-    "submit_inquiry":         submit_inquiry,
-}
 
-SYSTEM_PROMPT = """\
-你是「健身採買助手」，協助用戶在統一集團旗下各業務採買適合健身的食品與補給品。
+def _guess_tw_city(lat: float, lng: float) -> str:
+    """根據座標粗略推算台灣城市（僅供 UI 顯示用）。"""
+    if 25.05 <= lat <= 25.22 and 121.60 <= lng <= 121.95:
+        return "基隆市"
+    if 25.00 <= lat <= 25.10 and 121.42 <= lng <= 121.62:
+        return "台北市"
+    if 24.85 <= lat <= 25.22 and 121.30 <= lng <= 121.80:
+        return "新北市"
+    if 24.70 <= lat <= 25.00 and 120.95 <= lng <= 121.40:
+        return "桃園市"
+    if 24.50 <= lat <= 24.80 and 120.80 <= lng <= 121.20:
+        return "新竹"
+    if 24.00 <= lat <= 24.55 and 120.50 <= lng <= 121.10:
+        return "台中市"
+    if 23.35 <= lat <= 24.00 and 120.10 <= lng <= 120.80:
+        return "彰化/雲嘉"
+    if 22.90 <= lat <= 23.35 and 120.05 <= lng <= 120.60:
+        return "台南市"
+    if 22.40 <= lat <= 22.90 and 120.05 <= lng <= 120.55:
+        return "高雄市"
+    if 22.00 <= lat <= 22.60 and 120.40 <= lng <= 121.10:
+        return "屏東縣"
+    if 23.50 <= lat <= 24.50 and 121.30 <= lng <= 121.90:
+        return "花蓮縣"
+    if 22.40 <= lat <= 23.50 and 120.90 <= lng <= 121.50:
+        return "台東縣"
+    if 24.50 <= lat <= 24.85 and 121.60 <= lng <= 122.00:
+        return "宜蘭縣"
+    return ""
 
-## 可用通路
-- 7-11：即食舒肥雞胸、水煮蛋、鮪魚罐頭、無糖豆漿等輕食
-- 家樂福：生鮮雞胸肉、鮭魚、牛腱、希臘優格等生鮮
-- 康是美：乳清蛋白粉、BCAA、保健補充劑
-- 統一生機：燕麥片、黑豆漿、綜合堅果等天然穀物
 
-## 對話規則
-1. 一次只問一個問題，循序了解需求
-2. 用戶提到增肌/減脂但沒說預算，先問預算再呼叫工具
-3. 確認目標和預算後，才呼叫 recommend_high_protein
-4. 工具結果用自然語言整理，不要直接貼 JSON
+def _build_system() -> str:
+    """動態 system prompt：基底 + 用戶體能資料 + GPS 位置。"""
+    system = SYSTEM_PROMPT
 
-## 何時詢問是否建立諮詢單
-- 展示完商品推薦後，根據情況（用戶表示有興趣、想進一步了解、需要安排採購）
-  主動詢問：「需要幫您建立採買諮詢單嗎？後台人員可以幫您確認庫存和安排採購。」
-- 不要每次都問，只在用戶明顯有後續需求時才問
+    # ── 注入用戶體能資料 ──────────────────────────────────────────────────
+    user_id = st.session_state.get("user_id") or 0
+    gender  = st.session_state.get("user_gender", "")
+    age     = st.session_state.get("user_age", 0)
+    height  = st.session_state.get("user_height_cm", 0.0)
+    weight  = st.session_state.get("user_weight_kg", 0.0)
+    goal    = st.session_state.get("user_fitness_goal", "")
 
-## 建立諮詢單的流程（嚴格遵守）
-1. 用戶同意建立後，詢問聯絡姓名和電話
-2. 收集完後告知「即將為您建立諮詢單，確認嗎？」
-3. 用戶再次確認後，才呼叫 submit_inquiry
-4. 未獲明確同意，絕對不能呼叫 submit_inquiry
+    username      = st.session_state.get("username", "")
+    contact_phone = st.session_state.get("user_contact_phone", "")
+    user_address  = st.session_state.get("user_address", "")
 
-## 語言
-繁體中文，語氣親切自然，適當使用 emoji\
-"""
+    if user_id:
+        profile_parts = []
+        if gender:  profile_parts.append(f"性別={gender}")
+        if age:     profile_parts.append(f"年齡={age}歲")
+        if height:  profile_parts.append(f"身高={height}cm")
+        if weight:  profile_parts.append(f"體重={weight}kg")
+        if goal:    profile_parts.append(f"目標={goal}")
+        profile_str = "、".join(profile_parts) if profile_parts else "（體能資料尚未填寫）"
+
+        system += (
+            f"\n\n## 當前登入用戶（ID={user_id}）\n"
+            f"帳號名稱：{username}\n"
+            f"已儲存體能資料：{profile_str}\n\n"
+            f"### 諮詢單聯絡資料預設值（CRITICAL）\n"
+            f"呼叫 submit_inquiry 時，contact_name 預設填入「{username}」，"
+            + (f"contact_phone 預設填入「{contact_phone}」，" if contact_phone
+               else "contact_phone 尚未設定，需詢問用戶電話，")
+            + (f"address 預設填入「{user_address}」（外送地址，詢問用戶是否更改）。\n"
+               if user_address else "address 尚未設定，需詢問用戶外送地址。\n")
+            + f"用戶可在確認表單中修改，AI 不需要再詢問姓名，直接用帳號名稱即可。\n\n"
+            f"### 工具呼叫規則\n"
+            f"- 採買場景：從對話判斷 goal（增肌/減脂）與 budget，呼叫 recommend_high_protein；"
+            f"缺少任一資訊時，先向用戶詢問，禁止呼叫 calculate_tdee\n"
+            f"- TDEE 場景（用戶明確問基礎代謝/每日熱量）：呼叫 calculate_tdee(user_id={user_id})，"
+            f"工具自動讀取體能資料，禁止詢問身高體重年齡性別\n"
+        )
+        if not goal:
+            system += "注意：此用戶尚未設定健康目標，需先詢問「增肌/減脂/維持」再呼叫工具。\n"
+
+    # ── 注入健身課程快取（避免報名時重複呼叫 get_gym_courses）──────────
+    gym_courses = st.session_state.get("last_gym_courses")
+    if gym_courses:
+        lines = []
+        for c in gym_courses:
+            lines.append(
+                f"  course_id={c['course_id']} 《{c['course_name']}》"
+                f" 類型={c['course_type']} 教練={c['coach']}"
+                f" {c['weekday']} {c['time_start']} 剩餘={c['available_slots']}名額"
+                f" 狀態={c.get('status','')}"
+            )
+        system += (
+            "\n\n## 本月健身課程清單（已快取，報名時直接使用，禁止再次呼叫 get_gym_courses）\n"
+            + "\n".join(lines)
+            + "\n用戶說要報名某課程時：從上表找 course_id → 詢問姓名電話 → 確認 → 呼叫 enroll_gym_course\n"
+        )
+
+    # ── 注入 GPS 位置 ───────────────────────────────────────────────────
+    lat = st.session_state.get("user_lat")
+    lng = st.session_state.get("user_lng")
+    if lat and lng:
+        system += (
+            f"\n\n## 用戶目前 GPS 位置\n"
+            f"緯度 {lat:.5f}，經度 {lng:.5f}\n"
+            f"當用戶詢問附近任何地點時，呼叫 find_nearby_stores(name=..., category=...) 工具。\n"
+            f"由你根據用戶意圖決定 name（品牌名）與 category（OSM 類型），lat/lng 系統自動注入。\n"
+            f"例：7-11 → name=\"7-ELEVEN\" category=\"convenience\"；餐廳 → name=\"\" category=\"restaurant\""
+        )
+    return system
+
 
 # ── Claude API 呼叫（含 tool_use 循環）───────────────────────────────────────
-def _content_to_dict(content) -> list:
+
+def _sanitize_claude_msgs(msgs: list) -> list:
+    """移除 history 中沒有對應 tool_result 的 dangling assistant+tool_use message。
+    防止舊 session 的殘缺 history 造成 Claude API 400 錯誤。"""
     out = []
-    for b in content:
-        if b.type == "text":
-            out.append({"type": "text", "text": b.text})
-        elif b.type == "tool_use":
-            out.append({"type": "tool_use", "id": b.id,
-                        "name": b.name, "input": b.input})
+    i = 0
+    while i < len(msgs):
+        msg = msgs[i]
+        role    = msg.get("role", "")
+        content = msg.get("content", [])
+
+        # 偵測 assistant 訊息是否含有 tool_use block
+        has_tool_use = (
+            role == "assistant"
+            and isinstance(content, list)
+            and any(b.get("type") == "tool_use" for b in content)
+        )
+
+        if has_tool_use:
+            # 下一則必須是 user + tool_result 才算完整配對
+            nxt = msgs[i + 1] if i + 1 < len(msgs) else None
+            nxt_content = (nxt or {}).get("content", [])
+            pair_ok = (
+                nxt is not None
+                and nxt.get("role") == "user"
+                and isinstance(nxt_content, list)
+                and any(b.get("type") == "tool_result" for b in nxt_content)
+            )
+            if pair_ok:
+                out.append(msg)
+                out.append(nxt)
+                i += 2
+            else:
+                i += 1  # dangling — 跳過
+            continue
+
+        # 孤立的 tool_result user 訊息（前面沒有 assistant+tool_use）
+        if (role == "user"
+                and isinstance(content, list)
+                and any(b.get("type") == "tool_result" for b in content)):
+            i += 1
+            continue
+
+        out.append(msg)
+        i += 1
     return out
 
 
 def chat_with_claude(claude_msgs: list, api_key: str):
-    """執行完整的 Claude + tool_use 循環。
+    """Claude + tool_use 循環。submit_inquiry 攔截跳表單。
     回傳 (final_text, tool_log, updated_claude_msgs)。"""
     client = anthropic.Anthropic(api_key=api_key)
-    msgs   = list(claude_msgs)
+    msgs   = _sanitize_claude_msgs(list(claude_msgs))   # 清除殘缺 history
     log    = []
+    system = _build_system()
 
     while True:
         resp = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
-            system=SYSTEM_PROMPT,
+            system=system,
             tools=CLAUDE_TOOLS,
             messages=msgs,
         )
@@ -187,7 +257,6 @@ def chat_with_claude(claude_msgs: list, api_key: str):
                          "content": _content_to_dict(resp.content)})
             return text, log, msgs
 
-        # ── tool_use：先把 assistant 回應存進 msgs ────────────────────────────
         msgs.append({"role": "assistant",
                      "content": _content_to_dict(resp.content)})
 
@@ -195,6 +264,23 @@ def chat_with_claude(claude_msgs: list, api_key: str):
         for b in resp.content:
             if b.type != "tool_use":
                 continue
+
+            # submit_inquiry / enroll_gym_course 攔截 → 跳到確認表單
+            if b.name in ("submit_inquiry", "enroll_gym_course"):
+                prefill = dict(b.input)
+                if b.name == "enroll_gym_course":
+                    prefill["_enroll"] = True
+                if not prefill.get("user_id"):
+                    prefill["user_id"] = st.session_state.get("user_id") or 0
+                st.session_state.inquiry_prefill  = prefill
+                st.session_state.inquiry_products = _products_from_submit(prefill)
+                st.session_state.stage            = "inquiry_form"
+                text = "".join(bl.text for bl in resp.content if bl.type == "text")
+                # 移除 dangling assistant+tool_calls（未回應就 return 會導致下次 API 400）
+                if msgs and msgs[-1].get("role") == "assistant":
+                    msgs.pop()
+                return text or "（為您開啟報名確認表單 📋）", log, msgs
+
             result_str  = TOOL_FNS[b.name](**b.input)
             result_dict = json.loads(result_str)
             log.append({
@@ -202,7 +288,10 @@ def chat_with_claude(claude_msgs: list, api_key: str):
                 "params": b.input,
                 "result": result_dict,
                 "ts":     datetime.now().strftime("%H:%M:%S"),
+                "via":    "direct import",
             })
+            if b.name == "get_gym_courses" and result_dict.get("courses"):
+                st.session_state["last_gym_courses"] = result_dict["courses"]
             tool_results.append({
                 "type":        "tool_result",
                 "tool_use_id": b.id,
@@ -210,17 +299,477 @@ def chat_with_claude(claude_msgs: list, api_key: str):
             })
 
         msgs.append({"role": "user", "content": tool_results})
-        # 繼續循環，讓 Claude 整理工具結果後給出下一段回覆
 
 
-# ── 商品 / 諮詢單結果渲染（全用原生元件，不用 unsafe_allow_html）────────────
-VENDOR_EMOJI = {"7-11": "🟢", "家樂福": "🔵", "康是美": "🔴", "統一生機": "🟣"}
+# ── Ollama 本地 AI + 真實 MCP 工具呼叫 ───────────────────────────────────────
+
+def _extract_inquiry_products() -> list:
+    """從 mcp_log 或 last_products 快取取出商品清單（fallback 用）。"""
+    for entry in reversed(st.session_state.get("mcp_log", [])):
+        if entry["tool"] in ("recommend_high_protein", "search_grocery"):
+            prods = entry["result"].get("products") or entry["result"].get("items", [])
+            if prods:
+                return prods
+    return st.session_state.get("last_products", [])
+
+
+def _products_from_submit(prefill: dict) -> list:
+    """取 submit_inquiry 參數裡的 products_json（AI 應只放用戶指定商品）。
+    若 AI 沒有傳或傳空，才 fallback 到 mcp_log 裡的搜尋結果。"""
+    pj = prefill.get("products_json", "")
+    if pj:
+        try:
+            products = json.loads(pj)
+            if isinstance(products, list) and products:
+                return products
+        except Exception:
+            pass
+    return _extract_inquiry_products()
+
+
+async def _ollama_mcp_loop(msgs: list, prefetch_cache: dict | None = None,
+                           user_lat: float | None = None,
+                           user_lng: float | None = None,
+                           user_id: int = 0,
+                           ai_client=None, ai_model: str | None = None) -> dict:
+    """
+    Ollama + MCP 核心循環。
+    回傳 dict，包含 text、tool_log、history（完整 messages，含工具呼叫與結果，
+    排除系統 prompt）、intercepted、intercept_args。
+    user_lat/user_lng 從主執行緒傳入，因 ThreadPoolExecutor 無法存取 st.session_state。
+    """
+    # 同一輪內這些工具只允許呼叫一次（第二次直接回傳上一次結果，不重新呼叫 MCP）
+    _ONCE_PER_TURN = {
+        "find_nearby_stores", "get_current_time",
+        "recommend_after_meal", "recommend_high_protein", "get_all_fitness_products",
+        "check_inventory", "calculate_tdee", "get_gym_courses", "enroll_gym_course",
+    }
+
+    _client = ai_client or _ollama
+    _model  = ai_model  or OLLAMA_MODEL
+
+    tool_log          = []
+    messages          = list(msgs)          # msgs[0] = system prompt
+    call_cache: dict[tuple, str] = dict(prefetch_cache or {})
+    resolved_counts: dict[str, int] = {}   # 追蹤每個工具已回覆幾次
+    tool_last_result: dict[str, str] = {}  # 每個工具最後一次的結果（用於擋重複呼叫）
+
+    def _make_result(text: str, intercepted=False, intercept_args=None) -> dict:
+        return {
+            "text":           text,
+            "tool_log":       tool_log,
+            "history":        messages[1:],   # 排除 system prompt，其餘全保留
+            "intercepted":    intercepted,
+            "intercept_args": intercept_args,
+        }
+
+    async with Client(_mcp) as mcp_client:
+        max_turns = 10
+        for _ in range(max_turns):
+            # 任何工具被回覆超過 1 次 → 強制輸出文字（不再給工具清單）
+            force_text = any(v > 1 for v in resolved_counts.values())
+            call_kwargs: dict = {
+                "model":       _model,
+                "messages":    messages,
+                "temperature": 0.1,
+            }
+            if not force_text:
+                call_kwargs["tools"] = OLLAMA_TOOLS
+
+            _loop = asyncio.get_event_loop()
+            _fn   = _client.chat.completions.create
+            try:
+                resp = await _loop.run_in_executor(None, lambda: _fn(**call_kwargs))
+            except Exception as _api_err:
+                return _make_result(f"❌ AI API 連線失敗：{_api_err}")
+            msg = resp.choices[0].message
+
+            if not msg.tool_calls:
+                text_out = msg.content or ""
+                # 偵測「宣告要查詢但沒呼叫工具」的幻覺（第一輪且尚未呼叫任何工具）
+                _PLANNING_PHRASES = ("正在查詢", "請稍候", "馬上回來", "幫您查", "為您查", "查詢中")
+                if not resolved_counts and any(p in text_out for p in _PLANNING_PHRASES):
+                    print("⚠️ [幻覺] AI 說要查詢但未呼叫工具，追加一輪強制呼叫")
+                    messages.append({"role": "assistant", "content": text_out})
+                    messages.append({"role": "user", "content": "請立即呼叫對應的工具取得結果。"})
+                    continue  # 回到迴圈頂再給模型工具清單
+                # 把最終回答加入 messages，讓下次對話能讀到
+                messages.append({"role": "assistant", "content": text_out})
+                return _make_result(text_out)
+
+            messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in msg.tool_calls
+                ],
+            })
+            _assistant_msg_idx = len(messages) - 1  # 記住 assistant message 位置，攔截時用來回退
+
+            for tc in msg.tool_calls:
+                tool_name = tc.function.name
+                tool_args = json.loads(tc.function.arguments)
+                ts        = datetime.now().strftime("%H:%M:%S")
+
+                # 攔截表單提交 / 課程報名（history 此時已含前面所有工具結果）
+                if tool_name in ("submit_inquiry", "enroll_gym_course"):
+                    if tool_name == "enroll_gym_course":
+                        tool_args["_enroll"] = True
+                        if user_id and not tool_args.get("user_id"):
+                            tool_args["user_id"] = user_id
+                    elif not tool_args.get("user_id") and user_id:
+                        tool_args["user_id"] = user_id
+                    print(f"\n✋ [MCP] 攔截 {tool_name} args={tool_args}")
+                    # 移除 dangling assistant+tool_calls 及已執行的部分 tool responses
+                    del messages[_assistant_msg_idx:]
+                    return _make_result("", intercepted=True, intercept_args=tool_args)
+
+                # 自動補 user_id（Ollama 常忘記帶）
+                if tool_name == "calculate_tdee" and not tool_args.get("user_id") and user_id:
+                    tool_args["user_id"] = user_id
+                    print(f"👤 [MCP] 自動注入 user_id={user_id} → calculate_tdee")
+
+                # 自動補報名人姓名與電話（從 session_state 取登入用戶資料）
+                if tool_name == "enroll_gym_course":
+                    if not tool_args.get("contact_name") and user_id:
+                        _uname = st.session_state.get("username", "")
+                        if _uname:
+                            tool_args["contact_name"] = _uname
+                            print(f"👤 [MCP] 自動注入 contact_name={_uname} → enroll_gym_course")
+                    if not tool_args.get("contact_phone") and user_id:
+                        _phone = st.session_state.get("user_contact_phone", "")
+                        if _phone:
+                            tool_args["contact_phone"] = _phone
+                            print(f"📞 [MCP] 自動注入 contact_phone → enroll_gym_course")
+
+
+                # 自動補 GPS（Ollama 常忘記帶 lat/lng；用傳入的參數而非 st.session_state）
+                if tool_name == "find_nearby_stores" and not tool_args.get("lat"):
+                    if user_lat:
+                        tool_args["lat"] = user_lat
+                        tool_args["lng"] = user_lng
+                        print(f"📍 [MCP] 自動注入 GPS {user_lat:.5f},{user_lng:.5f}")
+                    else:
+                        # 沒有 GPS → 不呼叫 MCP（避免 pydantic 驗證失敗），直接回錯誤
+                        no_gps = json.dumps({"message": "⚠️ 尚未取得 GPS。請在側欄展開「📍 我的位置」並允許瀏覽器取得位置。"}, ensure_ascii=False)
+                        resolved_counts[tool_name] = resolved_counts.get(tool_name, 0) + 1
+                        tool_log.append({"tool": tool_name, "params": tool_args,
+                                         "result": json.loads(no_gps), "ts": ts, "via": "mcp.Client"})
+                        messages.append({"role": "tool", "tool_call_id": tc.id, "content": no_gps})
+                        continue
+
+                # 同輪單次型工具：呼叫過一次即攔截，直接回上次結果（不管有無店家）
+                if tool_name in _ONCE_PER_TURN and resolved_counts.get(tool_name, 0) > 0:
+                    prev = tool_last_result.get(tool_name, json.dumps({"message": "（重複呼叫已攔截）"}, ensure_ascii=False))
+                    print(f"\n🚫 [MCP] '{tool_name}' 本輪已呼叫 {resolved_counts[tool_name]} 次，攔截重複")
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": prev})
+                    continue
+
+                cache_key = (tool_name, json.dumps(tool_args, sort_keys=True, ensure_ascii=False))
+
+                # 重複呼叫快取
+                if cache_key in call_cache:
+                    result_text = call_cache[cache_key]
+                    print(f"\n⚡ [MCP] '{tool_name}' 命中快取，跳過重複呼叫")
+                else:
+                    # 執行 MCP 工具
+                    print(f"\n🔌 [MCP] call_tool('{tool_name}', {tool_args})")
+                    mcp_result = await mcp_client.call_tool(tool_name, tool_args)
+
+                    if getattr(mcp_result, "is_error", False):
+                        err_msg    = mcp_result.content[0].text if mcp_result.content else "工具執行錯誤"
+                        print(f"❌ [MCP] '{tool_name}' 錯誤: {err_msg}")
+                        result_text = json.dumps({"success": False, "message": err_msg}, ensure_ascii=False)
+                    else:
+                        result_text = mcp_result.content[0].text if mcp_result.content else "{}"
+                        print(f"✅ [MCP] '{tool_name}' 完成")
+                        call_cache[cache_key] = result_text
+
+                # 計數；記錄最後結果（_ONCE_PER_TURN 攔截用）
+                resolved_counts[tool_name] = resolved_counts.get(tool_name, 0) + 1
+                tool_last_result[tool_name] = result_text
+
+                try:
+                    result_dict = json.loads(result_text)
+                except Exception:
+                    result_dict = {"raw": result_text}
+
+                tool_log.append({"tool": tool_name, "params": tool_args,
+                                 "result": result_dict, "ts": ts, "via": "mcp.Client"})
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+        messages.append({"role": "assistant", "content": "（對話輪數過多，已停止。）"})
+        return _make_result("（對話輪數過多，已停止。）")
+
+
+_TDEE_TRIGGERS = {
+    "tdee", "TDEE", "bmr", "BMR", "基礎代謝", "每日熱量",
+    "吃多少", "熱量需求", "卡路里", "計算熱量", "計算tdee",
+}
+
+
+def _prefetch_tdee_for_ollama(prompt: str) -> tuple[str, dict | None]:
+    """Ollama 小模型無法可靠地用 user_id 呼叫工具，改由我們代勞：
+    偵測到 TDEE 相關問題時，直接呼叫 calculate_tdee，把結果嵌入 user prompt。
+    注入到 prompt 而非 system，小模型對用戶訊息的遵從度遠高於系統指令。
+    回傳 (augmented_prompt, tdee_log_entry | None)。
+    """
+    from app_helpers import calculate_tdee
+    uid = st.session_state.get("user_id", 0)
+    if not uid:
+        return prompt, None
+    if not any(kw in prompt for kw in _TDEE_TRIGGERS):
+        return prompt, None
+
+    try:
+        result_str  = calculate_tdee(user_id=uid)
+        result_dict = json.loads(result_str)
+        if not result_dict.get("bmr"):          # 缺少體能資料 → 不注入，讓 AI 去問
+            return prompt, None
+
+        augmented_prompt = (
+            f"{prompt}\n\n"
+            f"[系統資料] 已根據您的個人資料計算完成：\n"
+            f"{result_dict['message']}\n"
+            f"請直接根據以上數據回答，不必再詢問身高、體重、年齡。"
+            f"說明完畢後，詢問用戶『需要幫您推薦適合的採買商品嗎？』，等待確認再行動。"
+        )
+        log_entry = {
+            "tool":   "calculate_tdee",
+            "params": {"user_id": uid},
+            "result": result_dict,
+            "ts":     datetime.now().strftime("%H:%M:%S"),
+            "via":    "prefetch",
+        }
+        return augmented_prompt, log_entry
+    except Exception:
+        return prompt, None
+
+
+def ollama_chat(prompt: str, history: list) -> tuple:
+    """OpenAI-compatible AI + MCP 同步入口（支援 Ollama / GPT-4o）。
+    回傳 (text, tool_log, new_history)。"""
+    history = _compact_history(history)
+    history = _sanitize_for_openai(history)
+
+    # ── 決定使用哪個 AI 後端 ─────────────────────────────────────────
+    _oai_key = st.session_state.get("openai_key", "")
+    if _oai_key:
+        from openai import OpenAI as _OAI
+        _ai_client = _OAI(api_key=_oai_key)
+        _ai_model  = "gpt-4o"
+        # GPT-4o 工具呼叫能力強，不需要 Qwen 專用的 prefetch
+        augmented_prompt   = prompt
+        tdee_prefetch_log  = None
+    else:
+        _ai_client = None
+        _ai_model  = None
+        augmented_prompt, tdee_prefetch_log = _prefetch_tdee_for_ollama(prompt)
+
+    system = _build_system()
+    msgs = [{"role": "system", "content": system}] + history + [
+        {"role": "user", "content": augmented_prompt}
+    ]
+    try:
+        _user_lat = st.session_state.get("user_lat")
+        _user_lng = st.session_state.get("user_lng")
+        _user_id  = st.session_state.get("user_id") or 0
+
+        prefetch_cache: dict[tuple, str] = {}
+        if tdee_prefetch_log:
+            _key = ("calculate_tdee", json.dumps({"user_id": _user_id}, sort_keys=True, ensure_ascii=False))
+            prefetch_cache[_key] = json.dumps(tdee_prefetch_log["result"], ensure_ascii=False)
+
+        result = _run_async(_ollama_mcp_loop(msgs, prefetch_cache,
+                                              user_lat=_user_lat, user_lng=_user_lng,
+                                              user_id=_user_id,
+                                              ai_client=_ai_client, ai_model=_ai_model))
+    except Exception as exc:
+        # 展開 anyio ExceptionGroup 取得真正的錯誤訊息
+        real_exc = exc
+        if hasattr(exc, "exceptions") and exc.exceptions:
+            real_exc = exc.exceptions[0]
+        backend = "GPT-4o" if _oai_key else f"Ollama ({OLLAMA_MODEL})"
+        text = (
+            f"❌ {backend} 連線失敗：{real_exc}\n\n"
+            + ("請確認 OpenAI API Key 是否有效。" if _oai_key else
+               f"請確認：\n1. Ollama 已啟動：`ollama serve`\n2. 已下載模型：`ollama pull {OLLAMA_MODEL}`")
+        )
+        fallback_history = history + [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": text},
+        ]
+        return text, [], fallback_history
+
+    # 攔截到 submit_inquiry → 設定表單頁狀態
+    if result["intercepted"]:
+        intercepted_args = result["intercept_args"]
+        st.session_state.inquiry_prefill  = intercepted_args
+        st.session_state.inquiry_products = _products_from_submit(intercepted_args)
+        st.session_state.stage            = "inquiry_form"
+        # 把「開啟表單」訊息加入 history 讓對話連貫
+        new_history = result["history"] + [
+            {"role": "assistant", "content": "（為您開啟採買確認表單 📋）"}
+        ]
+        return "（正在開啟採買確認表單...）", result["tool_log"], new_history
+
+    text        = result["text"]
+    tool_log    = result["tool_log"]
+    new_history = result["history"]
+
+    # ── 幻覺偵測：AI 說「已建立諮詢單」但沒真的呼叫工具 → 自動跳表單 ────────
+    _HALLUCINATION_KEYWORDS = ("已建立", "已為您建立", "諮詢單已", "訂單已", "採購諮詢單")
+    _inquiry_called = any(e["tool"] == "submit_inquiry" for e in tool_log)
+    if not _inquiry_called and any(kw in text for kw in _HALLUCINATION_KEYWORDS):
+        print("⚠️ [幻覺偵測] AI 說已建立但未呼叫 submit_inquiry，自動跳表單")
+        st.session_state.inquiry_prefill  = {}
+        st.session_state.inquiry_products = st.session_state.get("last_products", [])
+        st.session_state.stage            = "inquiry_form"
+        return "（已偵測到確認意圖，為您開啟採買確認表單 📋）", tool_log, new_history
+
+    # 把 prefetch TDEE 加到 tool_log 最前面（讓 UI 顯示 TDEE 卡片）
+    # 但只在 Ollama 沒有自己呼叫 calculate_tdee 時才加，避免重複
+    if tdee_prefetch_log:
+        already_called = any(e["tool"] == "calculate_tdee" for e in tool_log)
+        if not already_called:
+            tool_log = [tdee_prefetch_log] + tool_log
+
+    # 快取最新推薦商品
+    for entry in tool_log:
+        if entry["tool"] in ("recommend_high_protein", "search_grocery", "get_all_fitness_products"):
+            prods = entry["result"].get("products") or entry["result"].get("items", [])
+            if prods:
+                st.session_state["last_products"] = prods
+        # 快取健身課程（供下一輪注入 system prompt，避免重複呼叫）
+        if entry["tool"] == "get_gym_courses" and entry["result"].get("courses"):
+            st.session_state["last_gym_courses"] = entry["result"]["courses"]
+
+    return text, tool_log, new_history
+
+
+# ── 表單頁：透過 MCP Client 真正送出 submit_inquiry ──────────────────────────
+
+async def _submit_inquiry_via_mcp(params: dict) -> dict:
+    """從確認表單送出 submit_inquiry 或 enroll_gym_course，透過 mcp.Client 真實呼叫。"""
+    is_enroll = params.pop("_enroll", False)
+    # 過濾 None 值，MCP 不接受 None（只接受 string/int）
+    clean = {k: (v if v is not None else "") for k, v in params.items()}
+
+    if is_enroll:
+        # 課程報名：呼叫 enroll_gym_course
+        enroll_params = {
+            "course_name":   clean.get("course_name", ""),
+            "contact_name":  clean.get("contact_name", ""),
+            "contact_phone": clean.get("contact_phone", ""),
+            "note":          clean.get("note", ""),
+            "user_id":       int(clean.get("user_id", 0) or 0),
+        }
+        print(f"\n🔌 [表單 MCP] mcp.Client.call_tool('enroll_gym_course', {enroll_params})")
+        async with Client(_mcp) as c:
+            result = await c.call_tool("enroll_gym_course", enroll_params)
+            text = result.content[0].text if result.content else "{}"
+            print(f"✅ [表單 MCP] enroll_gym_course 回傳: {text[:120]}")
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return {"success": False, "message": text}
+
+    print(f"\n🔌 [表單 MCP] mcp.Client.call_tool('submit_inquiry', {clean})")
+    async with Client(_mcp) as c:
+        result = await c.call_tool("submit_inquiry", clean)
+        text = result.content[0].text if result.content else "{}"
+        print(f"✅ [表單 MCP] submit_inquiry 回傳: {text[:120]}")
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return {"success": False, "message": text}
+
+
+# ── 商品 / 諮詢單結果渲染 ────────────────────────────────────────────────────
+
+VENDOR_EMOJI = {
+    "7-11": "🟢",
+    "萬家福": "🔵",
+    "樂家康": "🔵",
+    "康是美": "🔴",
+    "統一生機": "🟣"
+}
 TOOL_META    = {
     "search_grocery":         ("🔍", "商品關鍵字搜尋"),
     "recommend_high_protein": ("💪", "高蛋白目標推薦"),
     "check_inventory":        ("📦", "通路庫存查詢"),
     "submit_inquiry":         ("📋", "建立採買諮詢單"),
+    "get_current_time":       ("🕐", "當前時間"),
+    "find_nearby_stores":     ("📍", "附近地點搜尋"),
+    "find_route":             ("🗺️", "最佳配送路線"),
+    "analyze_meal_nutrition": ("🍽️", "飲食卡路里分析"),
+    "recommend_after_meal":   ("💡", "飲食後補充推薦"),
+    "calculate_tdee":           ("🧮", "個人化TDEE計算"),
+    "get_all_fitness_products": ("🛒", "全商品庫瀏覽"),
 }
+
+_CHAIN_MAP_COLOR = {
+    "7-ELEVEN": "green", "統一超商": "green",
+    "萬家福": "blue",    "樂家康": "blue",
+    "康是美": "orange",  "Cosmed": "orange",
+    "統一生機": "purple",
+}
+
+
+def _render_store_map(stores: list, user_lat, user_lng):
+    """用 folium 畫門市地圖。"""
+    try:
+        import folium
+        from streamlit_folium import st_folium
+    except ImportError:
+        st.warning("請安裝地圖套件：`uv pip install streamlit-folium folium`")
+        return
+
+    valid = [s for s in stores if s.get("lat") and s.get("lng")]
+    if not valid and not (user_lat and user_lng):
+        st.info("無法取得座標，無法顯示地圖。")
+        return
+
+    center_lat = user_lat or valid[0]["lat"]
+    center_lng = user_lng or valid[0]["lng"]
+
+    m = folium.Map(location=[center_lat, center_lng], zoom_start=15, tiles="OpenStreetMap")
+
+    if user_lat and user_lng:
+        folium.Marker(
+            [user_lat, user_lng],
+            popup="📍 您的位置",
+            tooltip="您的位置",
+            icon=folium.Icon(color="red", icon="home"),
+        ).add_to(m)
+
+    for s in valid:
+        color = "gray"
+        for chain, c in _CHAIN_MAP_COLOR.items():
+            if chain in s["name"]:
+                color = c
+                break
+        dist = s.get("distance_m")
+        dist_str = f"📏 {dist}m<br>" if dist else ""
+        popup_html = (
+            f"<b>{s['name']}</b><br>"
+            f"{dist_str}"
+            f"📍 {s.get('address', '地址詳見地圖')}<br>"
+            f"📞 {s.get('phone') or '—'}"
+        )
+        folium.Marker(
+            [s["lat"], s["lng"]],
+            popup=folium.Popup(popup_html, max_width=260),
+            tooltip=s["name"],
+            icon=folium.Icon(color=color),
+        ).add_to(m)
+
+    st_folium(m, width="100%", height=420, returned_objects=[])
 
 
 def render_tool_results(tool_calls: list):
@@ -229,19 +778,121 @@ def render_tool_results(tool_calls: list):
         result = tc["result"]
         icon, label = TOOL_META.get(tool, ("🔧", tool))
 
-        # 寫入工具：諮詢單建立成功特別顯示
+        # ── 諮詢單 ──────────────────────────────────────────────────────────
         if tool == "submit_inquiry":
             if result.get("success"):
                 st.success(
                     f"📋 **諮詢單已建立！**\n\n"
-                    f"單號：`{result.get('inquiry_no', '')}`\n\n"
+                    f"單號：`{result.get('feedback_no') or result.get('inquiry_no', '')}`\n\n"
                     f"{result.get('message', '')}"
                 )
             else:
-                st.error("諮詢單建立失敗，請稍後再試。")
+                err = result.get("message") or result.get("raw") or "未知錯誤"
+                st.error(f"諮詢單建立失敗：{err}")
             continue
 
-        # 讀取工具：商品列表
+        # ── 當前時間 ─────────────────────────────────────────────────────────
+        if tool == "get_current_time":
+            st.info(
+                f"🕐 **{result.get('datetime', '')}**　"
+                f"{result.get('weekday', '')}　{result.get('period', '')}"
+            )
+            continue
+
+        # ── 附近門市地圖 ─────────────────────────────────────────────────────
+        if tool == "find_nearby_stores":
+            stores = result.get("stores", [])
+            with st.expander(f"📍 附近門市 — {result.get('message', '')}", expanded=True):
+                if not stores:
+                    st.info(result.get("message", "無門市資料"))
+                else:
+                    _render_store_map(
+                        stores,
+                        st.session_state.get("user_lat"),
+                        st.session_state.get("user_lng"),
+                    )
+                    st.divider()
+                    for s in stores:
+                        dist = s.get("distance_m")
+                        dist_str = f"　📏 {dist}m" if dist else ""
+                        phone_str = f"　📞 {s['phone']}" if s.get("phone") else ""
+                        st.markdown(
+                            f"**{s['name']}**{dist_str}  \n"
+                            f"📍 {s.get('address', '地址詳見地圖')}{phone_str}"
+                        )
+            continue
+
+        # ── TDEE 個人化計算結果 ──────────────────────────────────────────────
+        if tool == "calculate_tdee":
+            with st.expander(
+                f"🧮 個人化 TDEE — {result.get('goal', '')} · {result.get('weight_kg', '')}kg",
+                expanded=True,
+            ):
+                st.info(result.get("message", ""))
+                st.divider()
+                r1c1, r1c2, r1c3 = st.columns(3)
+                r1c1.metric("🔥 基礎代謝 BMR", f"{int(result.get('bmr', 0))} kcal")
+                r1c2.metric("⚡ 每日消耗 TDEE", f"{int(result.get('tdee', 0))} kcal")
+                r1c3.metric("🎯 目標熱量", f"{int(result.get('target_calories', 0))} kcal")
+                st.divider()
+                r2c1, r2c2, r2c3 = st.columns(3)
+                r2c1.metric("🥩 蛋白質",  f"{int(result.get('protein_goal_g', 0))} g/天")
+                r2c2.metric("🍚 碳水化合物", f"{int(result.get('carbs_goal_g', 0))} g/天")
+                r2c3.metric("🧈 脂肪",    f"{int(result.get('fat_goal_g', 0))} g/天")
+                st.caption(
+                    f"活動量：{result.get('activity_desc', '')}　｜　"
+                    f"公式：Mifflin-St Jeor"
+                )
+            continue
+
+        # ── 飲食卡路里分析（單一食物）────────────────────────────────────────
+        if tool == "analyze_meal_nutrition":
+            if not result.get("success"):
+                st.warning(result.get("message", "無法查詢此食物的營養資料"))
+                continue
+            with st.expander(
+                f"🍽️ {result.get('food', '')} {result.get('amount_g', 0):.0f}g"
+                f" — {result.get('message', '')}",
+                expanded=True,
+            ):
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("🔥 熱量",   f"{result.get('calories',  0)} kcal")
+                c2.metric("🥩 蛋白質", f"{result.get('protein_g', 0)} g")
+                c3.metric("🧈 脂肪",   f"{result.get('fat_g',     0)} g")
+                c4.metric("🍚 碳水",   f"{result.get('carbs_g',   0)} g")
+                if result.get("source") == "Edamam":
+                    st.caption("資料來源：Edamam Nutrition API")
+            continue
+
+        # ── 飲食後補充採買推薦 ──────────────────────────────────────────────
+        if tool == "recommend_after_meal":
+            with st.expander(
+                f"💡 {result.get('fitness_goal', '增肌')} 補充採買建議",
+                expanded=True,
+            ):
+                st.info(result.get("message", ""))
+                c1, c2 = st.columns(2)
+                c1.metric("⚡ 尚需熱量",   f"{result.get('calories_gap', 0)} kcal")
+                c2.metric("💪 尚需蛋白質", f"{result.get('protein_gap',  0)} g")
+                st.divider()
+                products_rec = result.get("recommended_products", [])
+                if products_rec:
+                    st.markdown("**🛒 推薦補充商品**")
+                    for p in products_rec:
+                        vendor = p.get("vendor", "")
+                        emoji  = VENDOR_EMOJI.get(vendor, "⚪")
+                        st.markdown(
+                            f"**{emoji} {p.get('name', '')}** &nbsp;`{vendor}`  \n"
+                            f"🥩 {p.get('protein_g', 0)}g蛋白質 ｜ "
+                            f"🔥 {p.get('calories', 0)} kcal ｜ "
+                            f"💰 **${p.get('price', 0)}** ｜ "
+                            f"📦 庫存 {p.get('stock', 0)}"
+                        )
+            continue
+
+        # ── 商品列表（search / recommend / inventory）────────────────────────
+        if isinstance(result, list):
+            result = {"products": result, "message": f"共 {len(result)} 項商品"}
         products = result.get("products") or result.get("items", [])
         with st.expander(f"{icon} {label} — {result.get('message', '')}", expanded=True):
             if not products:
@@ -272,87 +923,282 @@ def render_tool_results(tool_calls: list):
 # ═════════════════════════════════════════════════════════════════════════════
 # Page config & session init
 # ═════════════════════════════════════════════════════════════════════════════
-st.set_page_config(page_title="健身採買助手", page_icon="🏋️", layout="wide")
+
+st.set_page_config(page_title="健康生活助手", page_icon="🌿", layout="wide")
 
 for k, v in {
-    "stage":        "login",
-    "user_id":      None,
-    "username":     "",
-    "display_msgs": [],
-    "claude_msgs":  [],
-    "mcp_log":      [],
-    "api_key":      os.environ.get("ANTHROPIC_API_KEY", ""),
+    "stage":              "login",
+    "user_id":            None,
+    "username":           "",
+    "display_msgs":       [],
+    "claude_msgs":        [],
+    "ollama_history":     [],
+    "mcp_log":            [],
+    "api_key":            os.environ.get("ANTHROPIC_API_KEY", ""),
+    "openai_key":         os.environ.get("OPENAI_API_KEY", ""),
+    "inquiry_prefill":    {},
+    "inquiry_products":   [],
+    "conversation_id":    None,
+    "last_products":      [],
+    "_pending_delete_id": None,
+    "user_lat":           None,
+    "user_lng":           None,
+    # 用戶體能資料
+    "user_gender":         "",
+    "user_age":            0,
+    "user_height_cm":      0.0,
+    "user_weight_kg":      0.0,
+    "user_fitness_goal":   "",
+    "user_address":        "",
+    "user_contact_phone":  "",
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
+
 with st.sidebar:
     if st.session_state.user_id:
+        # ── 用戶資訊列 ──────────────────────────────────────────────────────
         col_u, col_out = st.columns([3, 1])
         col_u.markdown(f"👤 **{st.session_state.username}**")
         if col_out.button("登出", key="logout"):
             for k in list(st.session_state.keys()):
                 del st.session_state[k]
             st.rerun()
+
+        # ── 操作按鈕 ────────────────────────────────────────────────────────
+        if st.button("➕ 新對話", use_container_width=True, key="new_chat", type="primary"):
+            st.session_state.update({
+                "display_msgs":    [],
+                "claude_msgs":     [],
+                "ollama_history":  [],
+                "mcp_log":         [],
+                "last_products":   [],
+                "conversation_id": None,
+                "stage":           "chat",
+            })
+            st.rerun()
+
+        b1, b2 = st.columns(2)
+        if b1.button("📦 我的訂單", use_container_width=True, key="goto_orders"):
+            st.session_state.stage = "my_orders"
+            st.rerun()
+        if b2.button("💬 對話", use_container_width=True, key="goto_chat"):
+            st.session_state.stage = "chat"
+            st.rerun()
+
+        # ── 快速訂單狀態（不離開對話）───────────────────────────────────
+        _quick_orders = get_my_inquiries(st.session_state.user_id)[:3]
+        if _quick_orders:
+            _ORDER_BADGE = {
+                "待處理": ("#FF9800", "⏳"),
+                "配送中": ("#1976D2", "🚚"),
+                "已完成": ("#43A047", "✅"),
+                "已拒絕": ("#E53935", "❌"),
+                "預留中": ("#9C27B0", "📦"),
+            }
+            with st.expander("📦 最近訂單", expanded=False):
+                for _qo in _quick_orders:
+                    _qs = _qo.get("status", "待處理")
+                    _qc, _qi = _ORDER_BADGE.get(_qs, ("#888", "❓"))
+                    st.markdown(
+                        f'<span style="background:{_qc};color:white;border-radius:8px;'
+                        f'padding:1px 7px;font-size:0.72rem;font-weight:700">{_qi} {_qs}</span>'
+                        f' <span style="font-size:0.8rem;color:#444">{_qo.get("goal","")[:14]}</span>',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(f'`{_qo["feedback_no"]}` · {str(_qo.get("created_at",""))[:10]}')
+                if st.button("查看全部", use_container_width=True, key="sb_all_orders"):
+                    st.session_state.stage = "my_orders"
+                    st.rerun()
+
         st.divider()
 
-    # API Key 設定
-    st.markdown("## ⚙️ 設定")
-    if not st.session_state.api_key:
-        entered = st.text_input(
-            "Anthropic API Key", type="password", placeholder="sk-ant-api03-..."
-        )
-        if entered.strip():
-            st.session_state.api_key = entered.strip()
-            st.rerun()
-    else:
-        st.success("✅ API Key 已設定")
-        if st.button("清除 Key"):
-            st.session_state.api_key = ""
-            st.rerun()
+        # ── 對話記錄列表 ────────────────────────────────────────────────────
+        st.markdown("#### 📜 對話記錄")
+        convs = get_conversations(st.session_state.user_id)
+        if not convs:
+            st.caption("還沒有對話記錄")
+        else:
+            current_id = st.session_state.get("conversation_id")
+
+            # ── 刪除 Modal 確認 ─────────────────────────────────────────
+            pending_del = st.session_state.get("_pending_delete_id")
+            if pending_del:
+                del_title = next((c["title"] for c in convs if c["id"] == pending_del), "?")
+                _delete_confirm_dialog(pending_del, del_title)
+
+            for conv in convs:
+                is_cur   = conv["id"] == current_id
+                date_str = conv["updated_at"][5:10]
+                label    = f"▶ {conv['title']}" if is_cur else conv["title"]
+                btn_type = "primary" if is_cur else "secondary"
+
+                col_btn, col_menu = st.columns([5, 1])
+                if col_btn.button(
+                    label,
+                    key=f"conv_{conv['id']}",
+                    use_container_width=True,
+                    type=btn_type,
+                    help=f"更新：{date_str}",
+                ):
+                    if not is_cur:
+                        rec = load_conv_from_db(conv["id"])
+                        st.session_state.update({
+                            "display_msgs":    json.loads(rec.get("disp_json",   "[]")),
+                            "ollama_history":  json.loads(rec.get("ollama_json", "[]")),
+                            "claude_msgs":     [],
+                            "mcp_log":         [],
+                            "last_products":   [],
+                            "conversation_id": conv["id"],
+                            "stage":           "chat",
+                        })
+                        st.rerun()
+
+                with col_menu.popover("⋯"):
+                    st.caption(conv["title"][:20])
+                    new_name = st.text_input(
+                        "重新命名", value=conv["title"],
+                        key=f"rename_input_{conv['id']}",
+                        label_visibility="collapsed",
+                        placeholder="輸入新名稱",
+                    )
+                    if st.button("✅ 更名", key=f"rename_ok_{conv['id']}", use_container_width=True):
+                        if new_name.strip():
+                            rename_conversation(conv["id"], new_name)
+                        st.rerun()
+                    st.divider()
+                    if st.button("🗑️ 刪除", key=f"del_{conv['id']}", type="secondary", use_container_width=True):
+                        st.session_state._pending_delete_id = conv["id"]
+                        st.rerun()
+
+        st.divider()
+
+    # ── 位置偵測（JS 組件必須在 expander 外呼叫才能正常執行）────────────────────
+    if _HAS_GEO:
+        _loc = _get_geolocation()
+        if _loc and _loc.get("coords"):
+            st.session_state.user_lat = _loc["coords"]["latitude"]
+            st.session_state.user_lng = _loc["coords"]["longitude"]
+
+    with st.expander("📍 我的位置", expanded=False):
+        if st.session_state.get("user_lat"):
+            lat, lng = st.session_state.user_lat, st.session_state.user_lng
+            st.success("已取得位置 ✅")
+            st.caption(f"緯度 {lat:.5f}　經度 {lng:.5f}")
+            if st.button("🔄 重新偵測", key="geo_refresh", use_container_width=True):
+                st.session_state.user_lat = None
+                st.session_state.user_lng = None
+                st.rerun()
+        else:
+            if _HAS_GEO:
+                st.info("正在取得位置…請允許瀏覽器授權")
+            else:
+                st.warning("請安裝 streamlit-js-eval 以啟用位置功能")
+                st.code("uv pip install streamlit-js-eval")
+            with st.form("manual_location", clear_on_submit=False):
+                st.caption("或手動輸入座標（Google Maps 右鍵可複製）")
+                c1, c2 = st.columns(2)
+                m_lat = c1.number_input("緯度", value=25.0330, format="%.4f", step=0.0001)
+                m_lng = c2.number_input("經度", value=121.5654, format="%.4f", step=0.0001)
+                if st.form_submit_button("套用座標", use_container_width=True):
+                    st.session_state.user_lat = m_lat
+                    st.session_state.user_lng = m_lng
+                    st.rerun()
 
     st.divider()
 
-    # MCP 工具呼叫紀錄
-    st.markdown("## 🔌 MCP 工具呼叫紀錄")
-    st.caption("Claude 決定呼叫工具時即時顯示；寫入工具需用戶確認後才會出現")
-    st.divider()
+    # ── AI 模式設定 ──────────────────────────────────────────────────────────
+    with st.expander("⚙️ AI 設定", expanded=False):
+        if st.session_state.api_key:
+            st.success("🤖 Claude AI 模式（claude-sonnet-4-6）")
+            entered = st.text_input("重新輸入 Anthropic Key", type="password", key="key_override")
+            c1, c2 = st.columns(2)
+            if c1.button("套用", key="apply_key"):
+                if entered.strip():
+                    st.session_state.api_key = entered.strip(); st.rerun()
+            if c2.button("清除（切回 GPT-4o / Ollama）", key="clear_key"):
+                st.session_state.api_key = ""; st.rerun()
+        elif st.session_state.get("openai_key"):
+            st.success("🤖 OpenAI GPT-4o 模式")
+            entered_oai = st.text_input("重新輸入 OpenAI Key", type="password", key="oai_override")
+            oc1, oc2 = st.columns(2)
+            if oc1.button("套用", key="apply_oai"):
+                if entered_oai.strip():
+                    st.session_state.openai_key = entered_oai.strip(); st.rerun()
+            if oc2.button("清除（切回 Ollama）", key="clear_oai"):
+                st.session_state.openai_key = ""; st.rerun()
+        else:
+            st.info(f"🤖 本地 Ollama（{OLLAMA_MODEL}）+ MCP")
+            st.markdown("**啟用雲端 AI：**")
+            entered = st.text_input(
+                "Anthropic API Key（Claude）", type="password",
+                placeholder="sk-ant-api03-...", key="key_input"
+            )
+            if st.button("啟用 Claude AI", key="enable_claude"):
+                if entered.strip():
+                    st.session_state.api_key = entered.strip(); st.rerun()
+            st.divider()
+            entered_oai = st.text_input(
+                "OpenAI API Key（GPT-4o）", type="password",
+                placeholder="sk-...", key="oai_key_input"
+            )
+            if st.button("啟用 GPT-4o", key="enable_openai"):
+                if entered_oai.strip():
+                    st.session_state.openai_key = entered_oai.strip(); st.rerun()
 
-    if not st.session_state.mcp_log:
-        st.caption("尚未呼叫任何工具")
-    else:
-        for entry in reversed(st.session_state.mcp_log):
-            icon, label = TOOL_META.get(entry["tool"], ("🔧", entry["tool"]))
-            is_write = entry["tool"] == "submit_inquiry"
-            with st.container(border=True):
-                badge = " 🔴寫入" if is_write else " 🟢讀取"
-                st.caption(f"{icon} **{entry['tool']}**{badge} · `{entry['ts']}`")
-                st.caption(label)
-                params_str = "  ".join(f"{k}={v}" for k, v in entry["params"].items())
-                st.code(params_str, language=None)
-                with st.expander("完整 JSON"):
-                    st.json({"params": entry["params"], "result": entry["result"]})
-        st.divider()
-        if st.button("清除紀錄", use_container_width=True):
-            st.session_state.mcp_log = []
-            st.rerun()
+    # ── MCP 工具呼叫紀錄（折疊）────────────────────────────────────────────
+    log_label = f"🔌 MCP 紀錄（{len(st.session_state.mcp_log)} 筆）"
+    with st.expander(log_label, expanded=bool(st.session_state.mcp_log)):
+        if not st.session_state.mcp_log:
+            st.caption("尚未呼叫任何工具")
+        else:
+            for entry in reversed(st.session_state.mcp_log):
+                icon, _ = TOOL_META.get(entry["tool"], ("🔧", entry["tool"]))
+                is_write = entry["tool"] in ("submit_inquiry", "dispatch_delivery")
+                via = entry.get("via", "unknown")
+                with st.container(border=True):
+                    rw  = "🔴寫入" if is_write else "🟢讀取"
+                    via_badge = "`mcp.Client`" if via == "mcp.Client" else "`direct`"
+                    st.caption(f"{icon} **{entry['tool']}** {rw} · `{entry['ts']}`")
+                    st.caption(f"路徑：{via_badge}")
+                    params_str = "  ".join(f"{k}={v}" for k, v in entry["params"].items())
+                    st.code(params_str, language=None)
+                    with st.expander("JSON"):
+                        st.json(entry["result"])
+            if st.button("清除", use_container_width=True, key="clear_mcp"):
+                st.session_state.mcp_log = []; st.rerun()
 
 # ── Header ─────────────────────────────────────────────────────────────────────
-st.markdown("## 🏋️ 健身採買助手")
-st.caption("統一集團 × Claude AI ✦ 7-11・家樂福・康是美・統一生機")
+
+st.markdown("## 🌿 健康生活助手")
+st.caption("統一集團 × AI 助手 ✦ 7-11・萬家福・康是美・統一生機")
 st.divider()
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STAGE: LOGIN
 # ═════════════════════════════════════════════════════════════════════════════
+
 if st.session_state.stage == "login":
     _, center, _ = st.columns([1, 2, 1])
     with center:
-        st.markdown("### 👤 歡迎使用健身採買助手")
+        st.markdown("### 👤 歡迎使用健康生活助手")
         st.markdown("登入後即可開始與 AI 對話採買 💪")
         st.markdown("")
         tab_login, tab_reg = st.tabs(["登入", "📝 新用戶註冊"])
+
+        def _load_profile(user: dict):
+            """登入/註冊後把體能資料存入 session_state。"""
+            st.session_state.user_gender        = user.get("gender", "")
+            st.session_state.user_age           = user.get("age", 0)
+            st.session_state.user_height_cm     = float(user.get("height_cm", 0) or 0)
+            st.session_state.user_weight_kg     = float(user.get("weight_kg", 0) or 0)
+            st.session_state.user_fitness_goal  = user.get("fitness_goal", "")
+            st.session_state.user_county_code   = user.get("county_code", "")
+            st.session_state.user_district_code = user.get("district_code", "")
+            st.session_state.user_address       = user.get("address", "")
+            st.session_state.user_contact_phone = user.get("contact_phone", "")
 
         with tab_login:
             u = st.text_input("帳號", key="li_u", placeholder="請輸入帳號")
@@ -363,112 +1209,614 @@ if st.session_state.stage == "login":
                     st.session_state.user_id  = user["id"]
                     st.session_state.username = user["username"]
                     st.session_state.stage    = "chat"
+                    _load_profile(user)
                     st.session_state.claude_msgs.append({
                         "role": "user",
-                        "content": f"（用戶 {user['username']} 已登入，請先問好並詢問他的健身需求）",
+                        "content": f"（用戶 {user['username']} 已登入，請先問好並詢問他的健康需求）",
                     })
                     st.rerun()
                 else:
                     st.error("帳號或密碼錯誤，請再試一次。")
 
         with tab_reg:
-            ru = st.text_input("設定帳號", key="reg_u", placeholder="請輸入帳號")
-            rp = st.text_input("設定密碼", type="password", key="reg_p", placeholder="至少 4 個字元")
+            ru = st.text_input("設定帳號 *", key="reg_u", placeholder="請輸入帳號")
+            rp = st.text_input("設定密碼 *", type="password", key="reg_p",
+                               placeholder="至少 4 個字元")
+
+            st.markdown("**體能資料（選填，幫助 AI 個人化建議）**")
+            rc1, rc2 = st.columns(2)
+            reg_gender = rc1.radio("性別", ["男", "女"], horizontal=True, key="reg_gender")
+            reg_age    = rc2.number_input("年齡（歲）", min_value=0, max_value=120,
+                                          value=0, step=1, key="reg_age")
+            rc3, rc4 = st.columns(2)
+            reg_height = rc3.number_input("身高（cm）", min_value=0.0, max_value=250.0,
+                                           value=0.0, step=0.5, key="reg_height")
+            reg_weight = rc4.number_input("體重（kg）", min_value=0.0, max_value=300.0,
+                                           value=0.0, step=0.5, key="reg_weight")
+            reg_goal = st.selectbox(
+                "健康目標",
+                ["（不設定）", "增肌", "減脂", "維持"],
+                key="reg_goal",
+            )
+            reg_phone   = st.text_input("聯絡電話（選填，作為諮詢單預設）", key="reg_phone", placeholder="例：0912345678")
+
+            st.markdown("**配送地區（選填）**")
+            _counties = get_counties()
+            _county_names = ["（不選擇）"] + [f"{c[1]}" for c in _counties]
+            _county_codes = [""] + [c[0] for c in _counties]
+            _reg_county_idx = st.selectbox(
+                "縣市", range(len(_county_names)),
+                format_func=lambda i: _county_names[i],
+                key="reg_county",
+            )
+            _reg_county_code = _county_codes[_reg_county_idx]
+            if _reg_county_code:
+                _districts = get_districts(_reg_county_code)
+                if _districts:
+                    _dist_names = [d[1] for d in _districts]
+                    _dist_codes = [d[0] for d in _districts]
+                    _reg_dist_idx = st.selectbox(
+                        "行政區",
+                        range(len(_dist_names)),
+                        format_func=lambda i: _dist_names[i],
+                        key=f"reg_dist_{_reg_county_code}",
+                    )
+                    _reg_district_code = _dist_codes[_reg_dist_idx]
+                else:
+                    st.caption("此縣市的行政區資料尚未收錄。")
+                    _reg_district_code = ""
+            else:
+                _reg_district_code = ""
+
+            reg_address = st.text_input(
+                "詳細地址（選填，後續可修改）",
+                key="reg_address",
+                placeholder="例：忠孝東路四段X號X樓",
+            )
+
             if st.button("註冊並登入", type="primary", use_container_width=True, key="btn_reg"):
                 if len(ru.strip()) < 2:
                     st.error("帳號至少 2 個字元。")
                 elif len(rp.strip()) < 4:
                     st.error("密碼至少 4 個字元。")
-                elif register_user(ru.strip(), rp.strip()):
-                    user = check_login(ru.strip(), rp.strip())
-                    st.session_state.user_id  = user["id"]
-                    st.session_state.username = user["username"]
-                    st.session_state.stage    = "chat"
-                    st.session_state.claude_msgs.append({
-                        "role": "user",
-                        "content": f"（新用戶 {user['username']} 剛完成註冊，請歡迎他並詢問健身需求）",
-                    })
-                    st.rerun()
                 else:
-                    st.error("此帳號已被使用，請換一個帳號。")
+                    goal_val = "" if reg_goal == "（不設定）" else reg_goal
+                    ok = register_user(
+                        ru.strip(), rp.strip(),
+                        gender=reg_gender,
+                        age=int(reg_age),
+                        height_cm=float(reg_height),
+                        weight_kg=float(reg_weight),
+                        fitness_goal=goal_val,
+                        county_code=_reg_county_code,
+                        district_code=_reg_district_code,
+                        address=reg_address.strip(),
+                        contact_phone=reg_phone.strip(),
+                    )
+                    if ok:
+                        user = check_login(ru.strip(), rp.strip())
+                        st.session_state.user_id  = user["id"]
+                        st.session_state.username = user["username"]
+                        st.session_state.stage    = "chat"
+                        _load_profile(user)
+                        st.session_state.claude_msgs.append({
+                            "role": "user",
+                            "content": f"（新用戶 {user['username']} 剛完成註冊，請歡迎他並詢問健康需求）",
+                        })
+                        st.rerun()
+                    else:
+                        st.error("此帳號已被使用，請換一個帳號。")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGE: INQUIRY FORM — 採買確認表單（AI 欲送出諮詢單時顯示）
+# ═════════════════════════════════════════════════════════════════════════════
+
+elif st.session_state.stage == "inquiry_form":
+    prefill  = st.session_state.inquiry_prefill
+    products = st.session_state.inquiry_products
+    is_enroll = prefill.get("_enroll", False)
+
+    col_back, col_title = st.columns([1, 6])
+    if col_back.button("← 返回對話", key="form_back"):
+        st.session_state.stage = "chat"
+        st.session_state.inquiry_prefill  = {}
+        st.session_state.inquiry_products = []
+        st.rerun()
+
+    if is_enroll:
+        col_title.markdown("## 🏋️ 課程報名確認")
+        st.caption("請確認報名資訊後送出，系統將同步建立諮詢單。")
+        st.divider()
+
+        course_nm = st.text_input("📚 報名課程", value=prefill.get("course_name", ""), key="enroll_course")
+        c1, c2 = st.columns(2)
+        name  = c1.text_input("👤 報名人姓名 *",
+                               value=prefill.get("contact_name", "") or st.session_state.get("username", ""),
+                               key="enroll_name")
+        phone = c2.text_input("📞 聯絡電話 *",
+                               value=prefill.get("contact_phone", "") or st.session_state.get("user_contact_phone", ""),
+                               key="enroll_phone")
+        note  = st.text_area("📝 備註（過敏、舊傷、特殊需求）", value=prefill.get("note", ""),
+                              height=80, key="enroll_note")
+
+        st.divider()
+        can_submit = bool(course_nm.strip() and name.strip() and phone.strip())
+        if not can_submit:
+            st.warning("⚠️ 請填寫課程名稱、姓名與電話後再送出。")
+
+        if st.button("✅ 確認報名", type="primary", disabled=not can_submit,
+                     use_container_width=True, key="form_submit"):
+            with st.spinner("📡 透過 MCP 建立報名中..."):
+                params = {
+                    "_enroll":       True,
+                    "course_name":   course_nm.strip(),
+                    "contact_name":  name.strip(),
+                    "contact_phone": phone.strip(),
+                    "note":          note or "",
+                    "user_id":       st.session_state.get("user_id") or 0,
+                }
+                result = _run_async(_submit_inquiry_via_mcp(params))
+            st.session_state.mcp_log.append({
+                "tool":   "enroll_gym_course",
+                "params": {k: v for k, v in params.items() if k != "_enroll"},
+                "result": result,
+                "ts":     datetime.now().strftime("%H:%M:%S"),
+                "via":    "mcp.Client",
+            })
+            if result.get("success"):
+                inq_no     = result.get("feedback_no", "")
+                course_ret = result.get("course_name", course_nm.strip())
+                success_msg = (
+                    f"✅ 已成功提交【{course_ret}】報名申請！"
+                    f"諮詢單號：`{inq_no}`，後台確認後將主動通知您。"
+                )
+                st.session_state.ollama_history.append(
+                    {"role": "assistant", "content": success_msg}
+                )
+                st.session_state.display_msgs.append({
+                    "role": "assistant",
+                    "content": success_msg,
+                    "tool_calls": [{
+                        "tool":   "enroll_gym_course",
+                        "params": {k: v for k, v in params.items() if k != "_enroll"},
+                        "result": result,
+                        "ts":     datetime.now().strftime("%H:%M:%S"),
+                        "via":    "mcp.Client",
+                    }],
+                })
+                st.session_state.stage           = "chat"
+                st.session_state.inquiry_prefill  = {}
+                st.session_state.inquiry_products = []
+                st.rerun()
+            else:
+                st.error(f"❌ 報名失敗：{result.get('message', '請稍後再試')}")
+
+    else:
+        col_title.markdown("## 📋 採買諮詢確認表單")
+        st.caption("AI 已根據對話幫您填入資訊，請確認或修改後再送出。")
+        st.divider()
+
+        # ── 基本資訊 ────────────────────────────────────────────────────────────
+        c1, c2 = st.columns(2)
+        goal   = c1.text_input("🎯 健康目標", value=prefill.get("goal", ""), key="form_goal")
+        budget = c2.number_input("💰 採買預算（元）", min_value=0, value=int(prefill.get("budget") or 0))
+
+        c3, c4 = st.columns(2)
+        name  = c3.text_input("👤 聯絡人姓名 *",
+                              value=prefill.get("contact_name", "") or st.session_state.get("username", ""),
+                              key="form_name")
+        phone = c4.text_input("📞 聯絡電話 *",
+                              value=prefill.get("contact_phone", "") or st.session_state.get("user_contact_phone", ""),
+                              key="form_phone")
+        note  = st.text_area("📝 備註", value=prefill.get("note", ""), height=80, key="form_note")
+        address = st.text_input(
+            "📍 配送地址 *",
+            value=prefill.get("address", "") or st.session_state.get("user_address", ""),
+            placeholder="例：台北市大安區忠孝東路四段X號X樓",
+            key="form_address",
+        )
+
+        # ── 商品清單（依通路分組，可取消勾選）────────────────────────────────────
+        st.divider()
+        st.markdown("### 📦 推薦商品清單")
+        st.caption("勾選您想納入本次採買的品項；不同通路商品將分組顯示。")
+
+        selected_products = []
+        if products:
+            by_vendor: dict = {}
+            for p in products:
+                v = p.get("vendor", "其他")
+                by_vendor.setdefault(v, []).append(p)
+
+            for vendor, items in by_vendor.items():
+                emoji = VENDOR_EMOJI.get(vendor, "⚪")
+                st.markdown(f"#### {emoji} {vendor}")
+                for p in items:
+                    pid   = p.get("id", p.get("name", ""))
+                    label = (
+                        f"**{p.get('name', '')}** — "
+                        f"💰 ${p.get('price', 0)} ｜ "
+                        f"🥩 蛋白質 {p.get('protein_g', 0)}g ｜ "
+                        f"🔥 {p.get('calories', 0)} kcal ｜ "
+                        f"📦 庫存 {p.get('stock', 0)}"
+                    )
+                    if st.checkbox(label, value=True, key=f"chk_{pid}"):
+                        selected_products.append(p)
+                st.markdown("")
+        else:
+            st.info("本次對話未產生商品推薦清單，可直接送出諮詢單。")
+
+        # ── 送出按鈕 ─────────────────────────────────────────────────────────────
+        st.divider()
+        can_submit = bool(name.strip() and phone.strip() and address.strip())
+        if not can_submit:
+            st.warning("⚠️ 請填寫聯絡人姓名、電話和配送地址後再送出。")
+
+        if st.button(
+            "✅ 確認送出採買諮詢單",
+            type="primary",
+            disabled=not can_submit,
+            use_container_width=True,
+            key="form_submit",
+        ):
+            with st.spinner("📡 透過 MCP 建立諮詢單中..."):
+                products_json_str = json.dumps(selected_products, ensure_ascii=False) if selected_products else ""
+                kw = prefill.get("keyword", "")
+
+                params = {
+                    "goal":          goal,
+                    "contact_name":  name.strip(),
+                    "contact_phone": phone.strip(),
+                    "budget":        int(budget),
+                    "keyword":       kw or "",
+                    "note":          note or "",
+                    "address":       address or "",
+                    "products_json": products_json_str,
+                    "user_id":       st.session_state.get("user_id") or 0,
+                }
+                result = _run_async(_submit_inquiry_via_mcp(params))
+
+            # 記入側欄 MCP 紀錄
+            st.session_state.mcp_log.append({
+                "tool":   "submit_inquiry",
+                "params": {k: v for k, v in params.items() if k not in ("products_json",)},
+                "result": result,
+                "ts":     datetime.now().strftime("%H:%M:%S"),
+                "via":    "mcp.Client",
+            })
+
+            if result.get("success"):
+                inq_no = result.get("feedback_no") or result.get("inquiry_no", "")
+                st.success(
+                    f"✅ **諮詢單已成功建立！**\n\n"
+                    f"單號：`{inq_no}`\n\n"
+                    f"後台人員將主動與您聯繫，確認採買與配送事宜。"
+                )
+
+                # 寫入 ollama 對話歷史，讓後續對話知道已送出
+                success_msg = f"採買諮詢單 `{inq_no}` 已成功建立！後台人員將主動聯繫您安排採購。"
+                st.session_state.ollama_history.append(
+                    {"role": "assistant", "content": success_msg}
+                )
+                # 也加入顯示訊息
+                st.session_state.display_msgs.append({
+                    "role": "assistant",
+                    "content": success_msg,
+                    "tool_calls": [{
+                        "tool":   "submit_inquiry",
+                        "params": params,
+                        "result": result,
+                        "ts":     datetime.now().strftime("%H:%M:%S"),
+                        "via":    "mcp.Client",
+                    }],
+                })
+
+                st.balloons()
+                if st.button("← 返回對話", key="form_done"):
+                    st.session_state.stage            = "chat"
+                    st.session_state.inquiry_prefill  = {}
+                    st.session_state.inquiry_products = []
+                    st.rerun()
+            else:
+                st.error(f"❌ 建立失敗：{result.get('message', '請稍後再試')}")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGE: MY ORDERS — 用戶歷史訂單查詢
+# ═════════════════════════════════════════════════════════════════════════════
+
+elif st.session_state.stage == "my_orders":
+    col_back, col_title = st.columns([1, 6])
+    if col_back.button("← 返回對話", key="orders_back"):
+        st.session_state.stage = "chat"
+        st.rerun()
+    col_title.markdown("## 📦 我的採買諮詢單")
+
+    uid = st.session_state.get("user_id", 0)
+    orders = get_my_inquiries(uid)
+
+    if col_back.button("🔄 重新整理", key="orders_refresh"):
+        st.rerun()
+
+    st.caption(f"共 {len(orders)} 筆歷史諮詢單")
+    st.divider()
+
+    STATUS_CFG = {
+        "待處理": {"color": "#FF9800", "icon": "⏳"},
+        "配送中": {"color": "#1976D2", "icon": "🚚"},
+        "已拒絕": {"color": "#9E9E9E", "icon": "❌"},
+        "已完成": {"color": "#43A047", "icon": "✅"},
+    }
+
+    if not orders:
+        st.info("您目前還沒有任何採買諮詢單。\n\n開始對話並讓 AI 幫您建立採買計劃吧！")
+    else:
+        for inq in orders:
+            status  = inq.get("status", "待處理")
+            scfg    = STATUS_CFG.get(status, {"color": "#888", "icon": "❓"})
+            inq_id  = inq["feedback_no"]
+
+            with st.container(border=True):
+                # ── 狀態 + 單號 + 時間 ──────────────────────────────────────
+                h1, h2, h3 = st.columns([2, 4, 2])
+                h1.markdown(
+                    f'<span style="background:{scfg["color"]};color:white;'
+                    f'border-radius:12px;padding:3px 10px;font-size:0.82rem;font-weight:700">'
+                    f'{scfg["icon"]} {status}</span>',
+                    unsafe_allow_html=True,
+                )
+                h2.markdown(f"**`{inq_id}`**")
+                h3.caption(str(inq.get("created_at", ""))[:16])
+
+                # ── 基本資訊 ──────────────────────────────────────────────────
+                d1, d2 = st.columns(2)
+                with d1:
+                    goal_val   = inq.get("goal") or "—"
+                    budget_val = inq.get("budget") or 0
+                    st.markdown(f"**目標：** {goal_val}")
+                    st.markdown(f"**預算：** {'$' + str(budget_val) if budget_val else '—'}")
+                    if inq.get("note"):
+                        st.markdown(f"**備註：** {inq['note']}")
+                with d2:
+                    st.markdown(f"**聯絡人：** {inq.get('contact_name') or '—'}")
+                    st.markdown(f"**電話：** {inq.get('contact_phone') or '—'}")
+
+                # ── 採買商品清單 ────────────────────────────────────────────
+                pj = inq.get("products_json", "")
+                if pj:
+                    try:
+                        plist = json.loads(pj)
+                        if plist:
+                            by_v: dict = {}
+                            for p in plist:
+                                by_v.setdefault(p.get("vendor", "其他"), []).append(p)
+                            total_items = sum(len(v) for v in by_v.values())
+                            with st.expander(f"🛒 採買商品（{total_items} 項 / {len(by_v)} 通路）"):
+                                for vendor, items in by_v.items():
+                                    emoji = VENDOR_EMOJI.get(vendor, "⚪")
+                                    st.markdown(f"**{emoji} {vendor}**")
+                                    for p in items:
+                                        st.markdown(
+                                            f"&nbsp;&nbsp;• {p.get('name', '')} — "
+                                            f"${p.get('price', 0)} ｜ "
+                                            f"蛋白質 {p.get('protein_g', 0)}g"
+                                        )
+                    except Exception:
+                        pass
+
+                # ── 配送資訊 ──────────────────────────────────────────────────
+                if inq.get("delivery_no"):
+                    st.success(
+                        f"🚚 **外送單號：** `{inq['delivery_no']}`　"
+                        f"｜　接單時間：{str(inq.get('accepted_at', ''))[:16]}"
+                    )
+
+                # ── 雙向訊息紀錄（每筆獨立泡泡） ────────────────────────────
+                _v_lines = [l.strip() for l in inq.get("vendor_reply", "").split("\n") if l.strip()]
+                _u_lines = [l.strip() for l in inq.get("user_reply",   "").split("\n") if l.strip()]
+                _has_msgs = bool(_v_lines or _u_lines)
+
+                with st.expander(
+                    "💬 溝通紀錄" + (f"（{len(_v_lines)+len(_u_lines)} 則）" if _has_msgs else "（尚無）"),
+                    expanded=_has_msgs,
+                ):
+                    for _line in _v_lines:
+                        if status == "已拒絕" and _v_lines.index(_line) == 0:
+                            st.warning(f"🏪 商家：{_line}")
+                        else:
+                            st.info(f"🏪 商家：{_line}")
+                    for _line in _u_lines:
+                        st.success(f"👤 您：{_line}")
+
+                    if status not in ("已完成",):
+                        st.divider()
+                        with st.form(f"user_reply_{inq_id}"):
+                            reply_text = st.text_area(
+                                "傳送訊息給商家",
+                                value="",
+                                placeholder="例：請送到一樓大廳，謝謝 / 可以換成無糖豆漿嗎？",
+                                key=f"rtxt_{inq_id}",
+                                height=80,
+                            )
+                            sent = st.form_submit_button("📨 送出", type="primary")
+                        if sent:
+                            if reply_text.strip():
+                                update_user_reply(inq_id, reply_text.strip(), st.session_state.get("username", "用戶"))
+                                st.rerun()
+                            else:
+                                st.warning("請輸入訊息內容。")
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STAGE: CHAT
 # ═════════════════════════════════════════════════════════════════════════════
+
 elif st.session_state.stage == "chat":
 
-    # API Key 未設定時攔截
-    if not st.session_state.api_key:
-        st.warning("⚠️ 請先在左側側欄輸入 Anthropic API Key 才能開始對話。")
-        st.stop()
+    using_claude = bool(st.session_state.api_key)
+    using_gpt    = bool(st.session_state.get("openai_key")) and not using_claude
+    _ai_badge    = (
+        "🤖 Claude AI (claude-sonnet-4-6)" if using_claude else
+        "🤖 GPT-4o"                        if using_gpt   else
+        f"🤖 Ollama ({OLLAMA_MODEL}) + MCP"
+    )
 
     col_info, col_reset = st.columns([5, 1])
-    col_info.caption(f"👤 {st.session_state.username} 的對話")
-    if col_reset.button("🗑️ 清空對話"):
-        st.session_state.display_msgs = []
-        st.session_state.claude_msgs  = []
-        st.session_state.mcp_log      = []
-        st.rerun()
+    col_info.caption(f"👤 {st.session_state.username} 的對話　{_ai_badge}")
+    with col_reset.popover("🗑️", help="清空對話"):
+        st.warning("確定要清空這段對話嗎？", icon="⚠️")
+        if st.button("確認清空", type="primary", use_container_width=True, key="confirm_clear"):
+            st.session_state.display_msgs   = []
+            st.session_state.claude_msgs    = []
+            st.session_state.ollama_history = []
+            st.session_state.mcp_log        = []
+            st.rerun()
 
-    # ── 1. 登入後的第一次自動問好 ─────────────────────────────────────────
+    # ── 1. 登入後的第一次自動問好 ──────────────────────────────────
     if not st.session_state.display_msgs and st.session_state.claude_msgs:
-        with st.chat_message("assistant", avatar="🏋️"):
-            with st.spinner("🤔 思考中..."):
-                try:
-                    text, tool_calls, updated = chat_with_claude(
-                        st.session_state.claude_msgs,
-                        st.session_state.api_key,
-                    )
-                    st.session_state.claude_msgs = updated
-                except anthropic.AuthenticationError:
-                    st.error("❌ API Key 無效，請重新設定。")
-                    st.stop()
-            st.markdown(text)
-        st.session_state.display_msgs.append({
-            "role": "assistant", "content": text, "tool_calls": [],
-        })
+        if using_claude:
+            with st.chat_message("assistant", avatar="🌿"):
+                with st.spinner("🤔 思考中..."):
+                    try:
+                        text, tool_calls, updated = chat_with_claude(
+                            st.session_state.claude_msgs,
+                            st.session_state.api_key,
+                        )
+                        st.session_state.claude_msgs = updated
+                    except anthropic.AuthenticationError:
+                        st.error("❌ API Key 無效，已切換至 Ollama 本地 AI 模式。")
+                        st.session_state.api_key = ""
+                        st.rerun()
+                st.markdown(_strip_images(text))
+            st.session_state.display_msgs.append({
+                "role": "assistant", "content": text, "tool_calls": [],
+            })
+        else:
+            username = st.session_state.username
+            _model_name = "GPT-4o" if using_gpt else OLLAMA_MODEL
+            text = (
+                f"嗨 {username}！我是您的健康生活助手 💪\n\n"
+                f"由 **{_model_name}** 透過 **MCP 協議**真實呼叫工具，"
+                f"幫您在 7-11、萬家福、康是美、統一生機 採買！\n\n"
+                f"請告訴我您的需求，例如：\n"
+                f"- 「我想增肌，預算 500 元」\n"
+                f"- 「有沒有雞胸肉」\n"
+                f"- 「乳清蛋白庫存還有嗎」"
+            )
+            st.session_state.ollama_history = [
+                {"role": "user",
+                 "content": f"（{username} 已登入，請問有什麼需要協助的？）"},
+                {"role": "assistant", "content": text},
+            ]
+            with st.chat_message("assistant", avatar="🌿"):
+                st.markdown(text)
+            st.session_state.display_msgs.append({
+                "role": "assistant", "content": text, "tool_calls": [],
+            })
         st.rerun()
 
-    # ── 2. 顯示歷史訊息 ───────────────────────────────────────────────────
+    # ── 1.5 新對話範例提示 ─────────────────────────────────────────
+    if not st.session_state.display_msgs and not st.session_state.claude_msgs:
+        st.markdown("#### 💡 試試這些問題開始對話：")
+        _examples = [
+            ("🍗 分析今日飲食", "我今天吃了雞胸肉150g和白飯2碗，幫我分析卡路里並推薦補充食物"),
+            ("💪 規劃增肌採買", "我想增肌，預算500元，幫我推薦高蛋白商品"),
+            ("🛒 搜尋乳清蛋白", "各通路有沒有乳清蛋白？庫存還有多少？"),
+            ("📍 找附近超商", "幫我找附近1公里內的超商或超市"),
+        ]
+        _ex_cols = st.columns(2)
+        for _i, (_lbl, _txt) in enumerate(_examples):
+            if _ex_cols[_i % 2].button(_lbl, use_container_width=True, key=f"ex_{_i}"):
+                st.session_state["_pending_prompt"] = _txt
+                st.rerun()
+        st.divider()
+
+    # ── 2. 顯示歷史訊息 ────────────────────────────────────────────
     for msg in st.session_state.display_msgs:
-        avatar = "👤" if msg["role"] == "user" else "🏋️"
+        avatar = "👤" if msg["role"] == "user" else "🌿"
         with st.chat_message(msg["role"], avatar=avatar):
-            st.markdown(msg["content"])
+            st.markdown(_strip_images(msg["content"]))
             if msg.get("tool_calls"):
                 render_tool_results(msg["tool_calls"])
 
-    # ── 3. 接收新輸入 ─────────────────────────────────────────────────────
-    if prompt := st.chat_input("輸入您的需求或回覆..."):
-        # 顯示用戶訊息
+    # ── 3. 接收新輸入 ───────────────────────────────────────────────
+    _ep = st.session_state.get("_pending_prompt")
+    if _ep and "_pending_prompt" in st.session_state:
+        del st.session_state["_pending_prompt"]
+    _ci = st.chat_input("輸入您的需求或回覆...")
+    prompt = _ep or _ci
+    if prompt:
         with st.chat_message("user", avatar="👤"):
             st.markdown(prompt)
 
-        # 更新 Claude 訊息列表
-        st.session_state.claude_msgs.append({"role": "user", "content": prompt})
+        navigating_to_form = False
+        _had_error = False
 
-        # 呼叫 Claude（AI 決定要不要呼叫 MCP 工具）
-        with st.chat_message("assistant", avatar="🏋️"):
-            with st.spinner("🤔 思考中..."):
-                try:
-                    text, tool_calls, updated = chat_with_claude(
-                        st.session_state.claude_msgs,
-                        st.session_state.api_key,
+        with st.chat_message("assistant", avatar="🌿"):
+            if using_claude:
+                st.session_state.claude_msgs.append({"role": "user", "content": prompt})
+                text = ""
+                tool_calls = []
+                with st.spinner("🤔 思考中..."):
+                    try:
+                        text, tool_calls, updated = chat_with_claude(
+                            st.session_state.claude_msgs,
+                            st.session_state.api_key,
+                        )
+                        st.session_state.claude_msgs = updated
+                    except anthropic.AuthenticationError:
+                        st.error("❌ API Key 無效，已切換至 Ollama 本地 AI 模式。")
+                        st.session_state.api_key = ""
+                        st.rerun()
+                    except Exception as exc:
+                        # 清除殘缺 user message，避免 history 帶著爛資料
+                        if (st.session_state.claude_msgs
+                                and st.session_state.claude_msgs[-1].get("content") == prompt):
+                            st.session_state.claude_msgs.pop()
+                        _had_error = True
+                        st.error("❌ AI 暫時無法回應，請稍後重試。")
+                        st.caption(f"錯誤原因：{str(exc)[:150]}")
+                        if st.button("🔄 重試上一則", key="retry_claude", type="primary"):
+                            st.session_state["_pending_prompt"] = prompt
+                            st.rerun()
+                if not _had_error:
+                    if st.session_state.stage == "inquiry_form":
+                        navigating_to_form = True
+                        st.info("📋 正在為您開啟採買確認表單...")
+            else:
+                _spin_label = "🤖 GPT-4o 透過 MCP 思考中..." if using_gpt else f"🤖 {OLLAMA_MODEL} 透過 MCP 思考中..."
+                with st.spinner(_spin_label):
+                    text, tool_calls, updated_history = ollama_chat(
+                        prompt, st.session_state.ollama_history
                     )
-                    st.session_state.claude_msgs = updated
-                except anthropic.AuthenticationError:
-                    st.error("❌ API Key 無效，請重新設定。")
-                    st.stop()
-                except Exception as exc:
-                    st.error(f"❌ 發生錯誤：{exc}")
-                    st.stop()
+                    st.session_state.ollama_history = updated_history
+                if st.session_state.stage == "inquiry_form":
+                    navigating_to_form = True
+                    st.info("📋 正在為您開啟採買確認表單...")
 
-            st.markdown(text)
+            if not navigating_to_form and not _had_error:
+                st.markdown(_strip_images(text))
+                if tool_calls:
+                    render_tool_results(tool_calls)
+
+        # 更新顯示訊息與 MCP 紀錄（錯誤時不寫入，讓用戶重試）
+        if not _had_error:
+            st.session_state.display_msgs.append({"role": "user", "content": prompt, "tool_calls": []})
+            if not navigating_to_form:
+                st.session_state.display_msgs.append({
+                    "role": "assistant", "content": text, "tool_calls": tool_calls,
+                })
             if tool_calls:
-                render_tool_results(tool_calls)
+                st.session_state.mcp_log.extend(tool_calls)
 
-        # 存入 display_msgs 供下次渲染
-        st.session_state.display_msgs.append({"role": "user", "content": prompt, "tool_calls": []})
-        st.session_state.display_msgs.append({
-            "role": "assistant", "content": text, "tool_calls": tool_calls,
-        })
-        st.session_state.mcp_log.extend(tool_calls)
+            # 自動儲存對話記錄到 DB
+            if st.session_state.get("user_id") and not navigating_to_form:
+                conv_id = save_conv_to_db(
+                    user_id       = st.session_state.user_id,
+                    conv_id       = st.session_state.get("conversation_id"),
+                    display_msgs  = st.session_state.display_msgs,
+                    ollama_history= st.session_state.ollama_history,
+                )
+                st.session_state.conversation_id = conv_id
+
+        if navigating_to_form:
+            st.rerun()
