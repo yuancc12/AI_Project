@@ -1392,14 +1392,14 @@ elif st.session_state.stage == "inquiry_form":
                 st.error(f"❌ 報名失敗：{result.get('message', '請稍後再試')}")
 
     else:
-        col_title.markdown("## 📋 採買諮詢確認表單")
+        col_title.markdown("## 📋 服務諮詢確認表單")
         st.caption("AI 已根據對話幫您填入資訊，請確認或修改後再送出。")
         st.divider()
 
         # ── 基本資訊 ────────────────────────────────────────────────────────────
         c1, c2 = st.columns(2)
-        goal   = c1.text_input("🎯 健康目標", value=prefill.get("goal", ""), key="form_goal")
-        budget = c2.number_input("💰 採買預算（元）", min_value=0, value=int(prefill.get("budget") or 0))
+        goal   = c1.text_input("🎯 需求目標", value=prefill.get("goal", ""), key="form_goal")
+        budget = c2.number_input("💰 預算／費用（元）", min_value=0, value=int(prefill.get("budget") or 0))
 
         c3, c4 = st.columns(2)
         name  = c3.text_input("👤 聯絡人姓名 *",
@@ -1410,7 +1410,7 @@ elif st.session_state.stage == "inquiry_form":
                               key="form_phone")
         note  = st.text_area("📝 備註", value=prefill.get("note", ""), height=80, key="form_note")
         address = st.text_input(
-            "📍 配送地址 *",
+            "📍 服務／配送地址 *",
             value=prefill.get("address", "") or st.session_state.get("user_address", ""),
             placeholder="例：台北市大安區忠孝東路四段X號X樓",
             key="form_address",
@@ -1450,10 +1450,10 @@ elif st.session_state.stage == "inquiry_form":
         st.divider()
         can_submit = bool(name.strip() and phone.strip() and address.strip())
         if not can_submit:
-            st.warning("⚠️ 請填寫聯絡人姓名、電話和配送地址後再送出。")
+            st.warning("⚠️ 請填寫聯絡人姓名、電話和地址後再送出。")
 
         if st.button(
-            "✅ 確認送出採買諮詢單",
+            "✅ 確認送出諮詢單",
             type="primary",
             disabled=not can_submit,
             use_container_width=True,
@@ -1490,11 +1490,11 @@ elif st.session_state.stage == "inquiry_form":
                 st.success(
                     f"✅ **諮詢單已成功建立！**\n\n"
                     f"單號：`{inq_no}`\n\n"
-                    f"後台人員將主動與您聯繫，確認採買與配送事宜。"
+                    f"後台人員將主動與您聯繫。"
                 )
 
                 # 寫入 ollama 對話歷史，讓後續對話知道已送出
-                success_msg = f"採買諮詢單 `{inq_no}` 已成功建立！後台人員將主動聯繫您安排採購。"
+                success_msg = f"諮詢單 `{inq_no}` 已成功建立！後台人員將主動與您聯繫。"
                 st.session_state.ollama_history.append(
                     {"role": "assistant", "content": success_msg}
                 )
