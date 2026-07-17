@@ -103,6 +103,10 @@ def _ensure_schema():
             con.execute("ALTER TABLE pms_form_feedback ADD COLUMN delivery_type TEXT NOT NULL DEFAULT '外送'")
         if 'pickup_store' not in cols_f:
             con.execute("ALTER TABLE pms_form_feedback ADD COLUMN pickup_store TEXT NOT NULL DEFAULT ''")
+        if 'images_json' not in cols_f:
+            con.execute("ALTER TABLE pms_form_feedback ADD COLUMN images_json TEXT NOT NULL DEFAULT '[]'")
+        if 'feedback_content' not in cols_f:
+            con.execute("ALTER TABLE pms_form_feedback ADD COLUMN feedback_content TEXT NOT NULL DEFAULT ''")
     except Exception:
         pass
     # Add / migrate mms_order_record columns to match real schema
@@ -371,7 +375,8 @@ def check_inventory(product_name: str) -> str:
 def submit_inquiry(goal: str, contact_name: str, contact_phone: str,
                    budget: int = 0, keyword: str = "", note: str = "",
                    address: str = "", products_json: str = "", user_id: int = 0,
-                   delivery_type: str = "外送", pickup_store: str = "") -> str:
+                   delivery_type: str = "外送", pickup_store: str = "",
+                   images_json: str = "") -> str:
     """將使用者的需求寫入後台諮詢單，讓後台人員跟進與協助。
 
     【重要】這是寫入操作。呼叫前必須已告知用戶「將為您建立諮詢單」並獲得明確確認。
@@ -401,15 +406,39 @@ def submit_inquiry(goal: str, contact_name: str, contact_phone: str,
                           ensure_ascii=False)
 
     feedback_no = "FB" + datetime.now().strftime("%y%m%d") + uuid.uuid4().hex[:6].upper()
+
+    # 建立 feedback_content（官方格式）
+    _img_paths = []
+    try:
+        _img_paths = json.loads(images_json) if images_json else []
+    except Exception:
+        pass
+    _answer_stub = {"answerId": None, "quantity": None, "countyCode": None,
+                    "countyName": None, "districtCode": None, "districtName": None,
+                    "isQuotedSeparately": None}
+    _fc_data = [
+        {"type": "1", "topicId": 1, "answerList": [{**_answer_stub, "answer": goal}]},
+    ]
+    if note:
+        _fc_data.append({"type": "2", "topicId": 2, "answerList": [{**_answer_stub, "answer": note}]})
+    for _i, _ip in enumerate(_img_paths):
+        _fc_data.append({"type": "6", "topicId": 54 + _i,
+                         "answerList": [{**_answer_stub, "answer": _ip, "topicId": 54 + _i}]})
+    feedback_content = json.dumps(
+        {"data": _fc_data, "formId": 1, "calculations": {"totalAmount": budget}},
+        ensure_ascii=False,
+    )
+
     con = _db()
     con.execute(
         "INSERT INTO pms_form_feedback "
         "(feedback_no,goal,budget,keyword,contact_name,contact_phone,note,address,"
-        " products_json,user_id,delivery_type,pickup_store,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " products_json,user_id,delivery_type,pickup_store,images_json,feedback_content,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (feedback_no, goal, budget, keyword,
          contact_name, contact_phone, note, address, products_json, user_id,
-         delivery_type, pickup_store, datetime.now().isoformat()),
+         delivery_type, pickup_store, json.dumps(_img_paths, ensure_ascii=False),
+         feedback_content, datetime.now().isoformat()),
     )
     con.commit()
     con.close()

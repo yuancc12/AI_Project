@@ -138,12 +138,14 @@ CREATE TABLE pms_form_feedback (
     note          TEXT NOT NULL DEFAULT '',
     address       TEXT NOT NULL DEFAULT '',
     user_id       INTEGER NOT NULL DEFAULT 0,
-    products_json TEXT NOT NULL DEFAULT '',
-    user_reply    TEXT NOT NULL DEFAULT '',
-    status        TEXT NOT NULL DEFAULT '待處理',
-    vendor_reply  TEXT NOT NULL DEFAULT '',
-    accepted_at   TEXT NOT NULL DEFAULT '',
-    created_at    TEXT NOT NULL
+    products_json    TEXT NOT NULL DEFAULT '',
+    user_reply       TEXT NOT NULL DEFAULT '',
+    status           TEXT NOT NULL DEFAULT '待處理',
+    vendor_reply     TEXT NOT NULL DEFAULT '',
+    accepted_at      TEXT NOT NULL DEFAULT '',
+    images_json      TEXT NOT NULL DEFAULT '[]',
+    feedback_content TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL
 );
 
 -- 合作廠商（餐廳、搬家、清潔、健身房等）
