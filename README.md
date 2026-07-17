@@ -96,7 +96,10 @@ uv pip install -r requirements.txt
 | 模式 | 模型 | 設定 |
 |---|---|---|
 | 本地（預設） | Ollama `qwen2.5:7b` | 自動偵測 `http://localhost:11434` |
-| 雲端（選填） | Claude `claude-sonnet-4-6` | 設 `ANTHROPIC_API_KEY` 環境變數 |
+| 雲端 — Anthropic | Claude `claude-sonnet-4-6` | 登入頁輸入 Anthropic API Key |
+| 雲端 — OpenAI | GPT-4o | 登入頁輸入 OpenAI API Key |
+
+三種模式在登入頁以 API Key 欄位切換，不需修改程式碼。優先順序：Claude > GPT-4o > Ollama（本地）。
 
 ---
 
