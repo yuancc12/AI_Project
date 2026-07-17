@@ -421,7 +421,7 @@ CLAUDE_TOOLS = [
             "由 AI 根據用戶需求判斷並填入 name 與 category 參數後呼叫。\n"
             "lat/lng 由系統自動注入，AI 不需傳入。\n\n"
             "【AI 判斷規則】\n"
-            "・用戶問 7-11 / 7-Eleven / 便利商店 / 超商 → name=\"7-ELEVEN\", category=\"convenience\"\n"
+            "・用戶問 7-11 / 7-Eleven / 便利商店 / 超商 / 附近哪裡買 → name=\"7-ELEVEN\", category=\"convenience\"（name 必填，不可空白）\n"
             "・用戶問萬家福 / 超市 → name=\"萬家福\", category=\"supermarket\"\n"
             "・用戶問康是美 / Cosmed / 藥妝 → name=\"康是美\", category=\"\"\n"
             "・用戶問統一生機 → name=\"統一生機\", category=\"\"\n"
