@@ -1001,8 +1001,8 @@ def find_nearby_stores(
         for field in ("name", "brand", "operator"):
             lines.append(f'nwr["{field}"="{name}"]{area};')
 
-    # 按 OSM category 類型搜尋
-    if category:
+    # 按 OSM category 類型搜尋（name 有值時略過，避免撈到競品）
+    if category and not name:
         for tk in ("amenity", "shop", "leisure"):
             lines.append(f'nwr["{tk}"="{category}"]{area};')
 
