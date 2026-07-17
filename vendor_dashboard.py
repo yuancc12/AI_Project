@@ -237,11 +237,16 @@ with (tab2 if tab2 is not None else _null):
     st.markdown("#### 用戶透過 AI 助手提交的採買諮詢，在此確認接單或拒絕並派送。")
     st.caption("派送操作透過 **mcp.Client** 真實呼叫 `dispatch_delivery` MCP 工具。")
 
-    col_filter, col_refresh = st.columns([3, 1])
-    status_opts = ["全部", "待處理", "配送中", "已拒絕", "已完成"]
-    sel_status  = col_filter.selectbox("篩選狀態", status_opts, key="inq_status")
-    if col_refresh.button("🔄 重新整理", use_container_width=True, key="inq_refresh"):
+    _SICON = {"全部": "📋", "待處理": "⏳", "配送中": "🚚", "預留中": "📦", "已拒絕": "❌", "已完成": "✅"}
+    status_opts = ["全部", "待處理", "配送中", "預留中", "已拒絕", "已完成"]
+    _rf_col, _sel_col = st.columns([1, 8])
+    if _rf_col.button("🔄", key="inq_refresh", help="重新整理"):
         st.rerun()
+    sel_status = _sel_col.radio(
+        "狀態篩選", status_opts,
+        format_func=lambda s: f"{_SICON.get(s, '')} {s}",
+        horizontal=True, key="inq_status", label_visibility="collapsed",
+    )
 
     inquiries = get_inquiries(sel_status, st.session_state.get("vendor_store"), brand=_brand_v, is_gym=_is_gym_only)
     st.caption(f"共 {len(inquiries)} 筆{'（' + sel_status + '）' if sel_status != '全部' else ''}")
@@ -258,26 +263,23 @@ with (tab2 if tab2 is not None else _null):
             inq_id   = inq["feedback_no"]
 
             with st.container(border=True):
-                # ── Header ──────────────────────────────────────────────────
-                h1, h2, h3 = st.columns([2, 3, 2])
+                # ── 第一行：狀態 + 配送方式 + 單號 + 時間 ──────────────────
+                _dtype = inq.get("delivery_type") or "外送"
+                _dtcfg = DELIVERY_TYPE_CFG.get(_dtype, DELIVERY_TYPE_CFG["外送"])
+                h1, h2, h3 = st.columns([4, 4, 2])
                 h1.markdown(
                     f'<span style="background:{s_color};color:white;border-radius:12px;'
                     f'padding:3px 10px;font-size:0.82rem;font-weight:700">'
-                    f'{s_icon} {status}</span>',
+                    f'{s_icon} {status}</span>'
+                    f'&nbsp;<span style="background:{_dtcfg["color"]};color:white;border-radius:10px;'
+                    f'padding:2px 8px;font-size:0.78rem;font-weight:700">'
+                    f'{_dtcfg["icon"]} {_dtcfg["label"]}</span>',
                     unsafe_allow_html=True,
                 )
                 h2.markdown(f"**`{inq_id}`**")
                 h3.caption(str(inq.get("created_at", ""))[:16])
 
-                # ── 自取/外送 標籤 ───────────────────────────────────────────
-                _dtype = inq.get("delivery_type") or "外送"
-                _dtcfg = DELIVERY_TYPE_CFG.get(_dtype, DELIVERY_TYPE_CFG["外送"])
-                st.markdown(
-                    f'<span style="background:{_dtcfg["color"]};color:white;border-radius:10px;'
-                    f'padding:2px 10px;font-size:0.8rem;font-weight:700">'
-                    f'{_dtcfg["icon"]} {_dtcfg["label"]}</span>',
-                    unsafe_allow_html=True,
-                )
+                # ── 第二行：地址資訊 ─────────────────────────────────────────
                 _addr = inq.get("address", "")
                 _pickup = inq.get("pickup_store", "")
                 if _dtype == "外送" and _addr:
@@ -286,21 +288,24 @@ with (tab2 if tab2 is not None else _null):
                     _pickup_txt = f"偏好門市：**{_pickup}**" if _pickup else "門市未指定"
                     st.success(f"🏃 **自取** — {_pickup_txt}")
 
-                # ── Details ─────────────────────────────────────────────────
-                d1, d2 = st.columns(2)
+                # ── 第三行：目標 ｜ 聯絡人 ｜ 預算 ─────────────────────────
+                d1, d2, d3 = st.columns(3)
                 with d1:
-                    st.markdown(f"**目標：** {inq.get('goal') or '—'}")
-                    budget_val = inq.get("budget") or 0
-                    st.markdown(f"**預算：** {'$' + str(budget_val) if budget_val else '—'}")
+                    st.markdown("**🎯 目標**")
+                    st.markdown(inq.get("goal") or "—")
                     _kw_disp = inq.get("keyword", "")
-                    # keyword 欄位在課程報名單中存的是 course_id（數字），不對外顯示
                     if _kw_disp and not _kw_disp.isdigit():
-                        st.markdown(f"**關鍵字：** {_kw_disp}")
+                        st.caption(f"關鍵字：{_kw_disp}")
                     if inq.get("note"):
-                        st.markdown(f"**備註：** {inq['note']}")
+                        st.caption(f"備註：{inq['note']}")
                 with d2:
-                    st.markdown(f"**聯絡人：** {inq.get('contact_name') or '—'}")
-                    st.markdown(f"**電話：** {inq.get('contact_phone') or '—'}")
+                    st.markdown("**👤 聯絡人**")
+                    st.markdown(inq.get("contact_name") or "—")
+                    st.caption(f"📞 {inq.get('contact_phone') or '—'}")
+                with d3:
+                    budget_val = inq.get("budget") or 0
+                    st.markdown("**💰 預算**")
+                    st.markdown(f"{'$' + str(budget_val) if budget_val else '—'}")
 
                 # ── 推薦商品清單（依通路分組）────────────────────────────────
                 pj = inq.get("products_json", "")
@@ -348,56 +353,37 @@ with (tab2 if tab2 is not None else _null):
                             f"{_dco_part}{_trk_part}　｜　預計 {_eta} 送達"
                         )
 
-                # ── 雙向訊息紀錄（每筆獨立泡泡） ────────────────────────────
+                # ── 雙向訊息紀錄 ─────────────────────────────────────────────
                 _v_lines = [l.strip() for l in inq.get("vendor_reply", "").split("\n") if l.strip()]
                 _u_lines = [l.strip() for l in inq.get("user_reply",   "").split("\n") if l.strip()]
-                if _v_lines or _u_lines:
-                    with st.expander("💬 訂單溝通訊息牆", expanded=True):
-                        if not _v_lines and not _u_lines:
-                            st.caption("尚無訊息紀錄")
-                        else:
-                            for _line in _v_lines:
-                                if status == "已拒絕" and _v_lines.index(_line) == 0:
-                                    st.warning(f"🏪 {_line}")
-                                else:
-                                    st.info(f"🏪 {_line}")
-                            for _line in _u_lines:
-                                st.success(f"👤 {_line}")
-
+                _msg_total = len(_v_lines) + len(_u_lines)
+                with st.expander(f"💬 訂單訊息（{_msg_total} 則）", expanded=_msg_total > 0):
+                    if _v_lines or _u_lines:
+                        for _line in _v_lines:
+                            if status == "已拒絕" and _v_lines.index(_line) == 0:
+                                st.warning(f"🏪 {_line}")
+                            else:
+                                st.info(f"🏪 {_line}")
+                        for _line in _u_lines:
+                            st.success(f"👤 {_line}")
                         st.divider()
-                        with st.form(f"msg_form_{inq_id}"):
-                            new_msg = st.text_input("輸入要傳送給用戶的訊息", key=f"msg_input_{inq_id}")
-                            if st.form_submit_button("📤 送出給用戶"):
-                                if new_msg:
-                                    con = _db()
-                                    store = st.session_state.get("vendor_store", "商家")
-                                    msg_entry = f"{datetime.now().strftime('%m/%d %H:%M')} [{store}]: {new_msg}\n"
-                                    con.execute(
-                                        "UPDATE pms_form_feedback SET vendor_reply = COALESCE(vendor_reply,'') || ? WHERE feedback_no=?",
-                                        (msg_entry, inq_id),
-                                    )
-                                    con.commit(); con.close()
-                                    st.rerun()
-                                else:
-                                    st.warning("請輸入訊息內容。")
-                else:
-                    with st.expander("💬 訂單溝通訊息牆", expanded=False):
+                    else:
                         st.caption("尚無訊息紀錄")
-                        with st.form(f"msg_form_{inq_id}"):
-                            new_msg = st.text_input("輸入要傳送給用戶的訊息", key=f"msg_input_{inq_id}")
-                            if st.form_submit_button("📤 送出給用戶"):
-                                if new_msg:
-                                    con = _db()
-                                    store = st.session_state.get("vendor_store", "商家")
-                                    msg_entry = f"{datetime.now().strftime('%m/%d %H:%M')} [{store}]: {new_msg}\n"
-                                    con.execute(
-                                        "UPDATE pms_form_feedback SET vendor_reply = COALESCE(vendor_reply,'') || ? WHERE feedback_no=?",
-                                        (msg_entry, inq_id),
-                                    )
-                                    con.commit(); con.close()
-                                    st.rerun()
-                                else:
-                                    st.warning("請輸入訊息內容。")
+                    with st.form(f"msg_form_{inq_id}"):
+                        new_msg = st.text_input("輸入要傳送給用戶的訊息", key=f"msg_input_{inq_id}")
+                        if st.form_submit_button("📤 送出給用戶"):
+                            if new_msg:
+                                con = _db()
+                                store = st.session_state.get("vendor_store", "商家")
+                                msg_entry = f"{datetime.now().strftime('%m/%d %H:%M')} [{store}]: {new_msg}\n"
+                                con.execute(
+                                    "UPDATE pms_form_feedback SET vendor_reply = COALESCE(vendor_reply,'') || ? WHERE feedback_no=?",
+                                    (msg_entry, inq_id),
+                                )
+                                con.commit(); con.close()
+                                st.rerun()
+                            else:
+                                st.warning("請輸入訊息內容。")
 
                 # ── 2. 派送操作（待處理=首次接單；配送中=其他通路加入分批配送）──
                 _vendor_brand = st.session_state.get("vendor_brand", "全部")
