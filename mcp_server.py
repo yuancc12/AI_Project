@@ -638,7 +638,7 @@ def dispatch_delivery(inquiry_no: str, vendor_name: str,
         if _urow and _urow["email"]:
             _carrier = f"\n配送業者：{delivery_company}" if delivery_company else ""
             _track   = f"\n追蹤單號：{tracking_no}"      if tracking_no    else ""
-            _eta = (f"{estimated_minutes // 60} 天" if estimated_minutes >= 60
+            _eta = (f"{estimated_minutes // 1440} 天" if estimated_minutes >= 1440
                     else f"{estimated_minutes} 分鐘")
             _send_email(
                 to_email=_urow["email"],
