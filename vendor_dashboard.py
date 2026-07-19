@@ -530,8 +530,31 @@ with (tab2 if tab2 is not None else _null):
                                         (inq_id,),
                                     )
                                 _ec.commit()
+                                # 發報名確認 Email
+                                _fb_row = _ec.execute(
+                                    "SELECT user_id, contact_name FROM pms_form_feedback WHERE feedback_no=?",
+                                    (inq_id,)
+                                ).fetchone()
+                                if _fb_row and _fb_row["user_id"]:
+                                    _urow = _ec.execute(
+                                        "SELECT email, username FROM users WHERE id=?",
+                                        (_fb_row["user_id"],)
+                                    ).fetchone()
+                                    if _urow and _urow["email"]:
+                                        from mcp_server import _send_email as _se
+                                        _goal = inq.get("goal", "課程")
+                                        _se(
+                                            to_email=_urow["email"],
+                                            subject=f"【統一生活管家】{_goal} 報名已確認",
+                                            body=(
+                                                f"您好 {_urow['username']}，\n\n"
+                                                f"✅ 您的{_goal}報名已由後台確認！\n\n"
+                                                + (f"📩 後台訊息：{v_reply}\n\n" if v_reply else "")
+                                                + f"感謝您使用統一生活管家，期待在課堂上見到您！"
+                                            ),
+                                        )
                                 _ec.close()
-                                st.success("✅ 報名已確認！通知訊息已發送給用戶。")
+                                st.success("✅ 報名已確認！Email 通知已發送給用戶。")
                                 st.session_state.pop(f"act_{inq_id}", None)
                                 st.rerun()
 
