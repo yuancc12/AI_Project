@@ -354,7 +354,7 @@ def check_inventory(product_name: str) -> str:
     """
     con = _db()
     rows = con.execute(
-        "SELECT name, vendor, stock, price FROM fitness_product "
+        "SELECT name, vendor, stock, price, protein_g, calories FROM fitness_product "
         "WHERE name LIKE ? ORDER BY stock DESC",
         (f"%{product_name}%",),
     ).fetchall()
