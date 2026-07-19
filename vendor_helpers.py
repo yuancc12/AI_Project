@@ -550,13 +550,16 @@ def get_dispatches(feedback_no: str) -> list:
 
 
 def get_active_deliveries():
-    """取得所有待取件或配送中的外送單（status 01 或 02），含聯絡資訊與地址。"""
+    """取得所有待取件或配送中的外送單（status 01 或 02），含聯絡資訊與完整地址。"""
     con = _db()
     rows = con.execute("""
         SELECT m.*, f.contact_name, f.contact_phone, f.address,
-               f.products_json, f.goal, f.contact_name as recipient
+               f.products_json, f.goal, f.contact_name as recipient,
+               c.name as county_name, d.name as district_name
         FROM mms_order_record m
         JOIN pms_form_feedback f ON m.feedback_no = f.feedback_no
+        LEFT JOIN sys_county   c ON c.code = f.county_code
+        LEFT JOIN sys_district d ON d.code = f.district_code AND d.county_code = f.county_code
         WHERE m.status IN ('01', '02')
           AND (f.goal IS NULL OR f.goal NOT LIKE '課程報名：%')
         ORDER BY m.created_at DESC
