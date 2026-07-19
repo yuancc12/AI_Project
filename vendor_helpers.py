@@ -650,11 +650,16 @@ def update_course_max_slots(course_id: int, max_slots: int):
 
 
 def open_course_and_notify(course_id: int) -> int:
-    """開課並通知所有已報名學員（更新 enrollment + feedback 狀態），回傳通知人數。"""
+    """開課並通知所有已報名學員（更新 enrollment + feedback 狀態 + Email），回傳通知人數。"""
     con = _db()
     now_iso = datetime.now().isoformat()
+    course_row = con.execute(
+        "SELECT gc.course_name, gc.weekday, gc.time_start, pv.name AS gym_name "
+        "FROM gym_course gc JOIN partner_vendor pv ON pv.id=gc.gym_id WHERE gc.id=?",
+        (course_id,)
+    ).fetchone()
+    course_info = dict(course_row) if course_row else {}
     con.execute("UPDATE gym_course SET status='已開課' WHERE id=?", (course_id,))
-    # 取所有未通知的 enrollment
     rows = con.execute(
         "SELECT * FROM course_enrollment WHERE course_id=? AND notified=0",
         (course_id,)
@@ -672,6 +677,28 @@ def open_course_and_notify(course_id: int) -> int:
                 (f"🎉 恭喜！您報名的課程已確認開課！請依課程時間準時出席。（{now_iso[:16]}）",
                  r["feedback_no"]),
             )
+            # 發開課 Email
+            fb = con.execute(
+                "SELECT user_id, contact_name FROM pms_form_feedback WHERE feedback_no=?",
+                (r["feedback_no"],)
+            ).fetchone()
+            if fb and fb["user_id"]:
+                urow = con.execute(
+                    "SELECT email, username FROM users WHERE id=?", (fb["user_id"],)
+                ).fetchone()
+                if urow and urow["email"]:
+                    _send_email(
+                        to_email=urow["email"],
+                        subject=f"【統一生活管家】{course_info.get('course_name','課程')} 確認開課！",
+                        body=(
+                            f"您好 {urow['username']}，\n\n"
+                            f"🎉 恭喜！您報名的「{course_info.get('gym_name','')}」"
+                            f"【{course_info.get('course_name','課程')}】已確認開課！\n\n"
+                            f"📅 上課時間：{course_info.get('weekday','')} {course_info.get('time_start','')}\n\n"
+                            f"請依課程時間準時出席，期待在課堂上見到您！\n\n"
+                            f"感謝您使用統一生活管家！"
+                        ),
+                    )
         count += 1
     con.commit(); con.close()
     return count
