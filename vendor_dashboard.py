@@ -81,7 +81,8 @@ _is_gym_vendor = _is_gym_only or _is_admin_v
 
 # ── 頂部統計 ─────────────────────────────────────────────────────────────────
 
-total, out_of_stock, low_stock_count, avg_protein, pending, delivering = get_stats()
+_stat_vendor = "" if _is_admin_v else (_brand_v if _brand_v not in ("全部", "外送員", "健身房") else "")
+total, out_of_stock, low_stock_count, avg_protein, pending, delivering = get_stats(_stat_vendor)
 if _is_driver:
     m1, m2 = st.columns(2)
     m1.metric("⏳ 待取件",  pending)
