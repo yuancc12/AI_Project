@@ -622,22 +622,24 @@ CLAUDE_TOOLS = [
     {
         "name": "enroll_gym_course",
         "description": (
-            "替用戶報名指定的 Being Sport 健身課程（寫入操作）。每次只報名一個課程。\n"
-            "【多課程】用戶要報名 N 個課程時，必須依序呼叫此工具 N 次，每次帶不同 course_name，全部完成後再回覆用戶。\n"
+            "替用戶報名一或多個 Being Sport 健身課程（寫入操作），產生**一張**諮詢單。\n"
+            "【單一課程】填 course_name 即可。\n"
+            "【多課程】填 course_names_json，例如 [\"拳擊有氧\",\"TRX 懸吊訓練\"]，只呼叫一次即可，產生一張諮詢單包含所有課程。\n"
             "course_name 填用戶說的課程名稱即可，工具自動查 ID，禁止呼叫 get_gym_courses。\n"
             "contact_name 從系統提示的帳號名稱取得，不需詢問用戶。\n"
             "contact_phone 從系統提示取得；若未設定才詢問用戶。\n"
-            "【流程】用戶說要報名 → 確認課程與電話 → 逐一呼叫此工具。嚴禁未確認就寫入。"
+            "【流程】用戶說要報名 → 確認課程與電話 → 呼叫一次此工具。嚴禁未確認就寫入。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "course_name":   {"type": "string", "description": "課程名稱（用戶說的名稱，可部分比對）"},
-                "contact_name":  {"type": "string", "description": "報名人姓名（從系統提示的帳號名稱取得）"},
-                "contact_phone": {"type": "string", "description": "聯絡電話（從系統提示取得）"},
-                "note":          {"type": "string", "description": "備注，如過敏或舊傷（選填）"},
+                "course_name":       {"type": "string", "description": "單一課程名稱（只報名一門課時使用）"},
+                "course_names_json": {"type": "string", "description": "多課程時使用，JSON 陣列字串，例如 [\"拳擊有氧\",\"TRX 懸吊訓練\"]"},
+                "contact_name":      {"type": "string", "description": "報名人姓名（從系統提示的帳號名稱取得）"},
+                "contact_phone":     {"type": "string", "description": "聯絡電話（從系統提示取得）"},
+                "note":              {"type": "string", "description": "備注，如過敏或舊傷（選填）"},
             },
-            "required": ["course_name", "contact_name", "contact_phone"],
+            "required": ["contact_name", "contact_phone"],
         },
     },
     {
@@ -710,7 +712,7 @@ SYSTEM_PROMPT = """\
 | 描述今天吃了什麼 | 逐項 `analyze_meal_nutrition` → 加總 → `recommend_after_meal` |
 | 問 TDEE、每日熱量需求 | `calculate_tdee(user_id=...)` |
 | 問健身課程、運動課、Being Sport 課表 | `get_gym_courses()` 取全部課程，AI 再推薦 |
-| 用戶確認要報名課程 | 每個課程**分別呼叫一次** `enroll_gym_course`，報名 N 個課程就呼叫 N 次，每次帶不同 `course_name`，禁止只呼叫一次就結束 |
+| 用戶確認要報名課程 | 呼叫**一次** `enroll_gym_course`；單課填 `course_name`，多課填 `course_names_json=["課程A","課程B"]`，產生一張諮詢單 |
 | 問游泳池、體育館、運動中心、公共運動場館 | `find_sports_venues(keyword, county_code)` — 公共場館資訊 |
 | 問附近門市/餐廳/咖啡廳/商業健身房等地點 | `find_nearby_stores(name, category)` — AI 自行判斷帶入 |
 | 問天氣、要不要出門 | `get_weather()`，系統自動注入 GPS |
