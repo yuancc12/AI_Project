@@ -951,6 +951,40 @@ def render_tool_results(tool_calls: list):
 
 st.set_page_config(page_title="健康生活助手", page_icon="🌿", layout="wide")
 
+# ── PWA meta tags + manifest（讓手機可「加入主畫面」成為 app）────────────────
+st.markdown("""
+<script>
+(function() {
+    // manifest
+    if (!document.querySelector('link[rel="manifest"]')) {
+        var l = document.createElement('link');
+        l.rel = 'manifest'; l.href = '/app/static/manifest.json';
+        document.head.appendChild(l);
+    }
+    // theme color
+    if (!document.querySelector('meta[name="theme-color"]')) {
+        var m = document.createElement('meta');
+        m.name = 'theme-color'; m.content = '#00833D';
+        document.head.appendChild(m);
+    }
+    // iOS PWA
+    ['apple-mobile-web-app-capable','mobile-web-app-capable'].forEach(function(n) {
+        if (!document.querySelector('meta[name="'+n+'"]')) {
+            var mi = document.createElement('meta');
+            mi.name = n; mi.content = 'yes';
+            document.head.appendChild(mi);
+        }
+    });
+    var mt = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+    if (!mt) {
+        mt = document.createElement('meta');
+        mt.name = 'apple-mobile-web-app-title'; mt.content = '生活管家';
+        document.head.appendChild(mt);
+    }
+})();
+</script>
+""", unsafe_allow_html=True)
+
 for k, v in {
     "stage":              "login",
     "user_id":            None,
