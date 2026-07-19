@@ -212,7 +212,23 @@ ADMIN_TOOLS = [
                 "required": ["inquiry_no", "vendor_name"],
             },
         },
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email_notification",
+            "description": "發送 Email 通知給指定收件人。適用於接單通知、訂單狀態更新、系統公告等。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to_email": {"type": "string", "description": "收件人 Email 地址，例如「user@example.com」"},
+                    "subject":  {"type": "string", "description": "郵件主旨"},
+                    "body":     {"type": "string", "description": "郵件內文（純文字）"},
+                },
+                "required": ["to_email", "subject", "body"],
+            },
+        },
+    },
 ]
 
 
@@ -453,10 +469,12 @@ def get_inquiries(status_filter=None, store_name=None, brand=None, is_gym=False)
         conditions.append("goal LIKE '課程報名：%'")
     elif store_name and store_name != "管理員":
         if brand and brand not in ("全部", "健身房"):
-            # 顯示：已派給本門市 OR (待處理 AND 含本品牌商品) OR (待處理 AND 無商品清單)
+            # 顯示：已派給本門市 OR (待處理 AND (含本品牌商品 OR 商品無vendor欄位 OR 清單為空))
             conditions.append(
                 "(vendor_reply LIKE ? OR "
-                "(status='待處理' AND (products_json LIKE ? OR products_json IS NULL OR products_json='')))"
+                "(status='待處理' AND (products_json LIKE ? "
+                "OR products_json NOT LIKE '%\"vendor\":%' "
+                "OR products_json IS NULL OR products_json='' OR products_json='[]')))"
             )
             params.append(f"%{store_name}%")
             params.append(f'%"vendor": "{brand}"%')
