@@ -18,7 +18,7 @@ if not os.path.exists(DB):
     import seed
     seed.main()
 
-from mcp_server import mcp as _mcp  # MCP Server instance（透過 Client 真實呼叫）
+from mcp_server import mcp as _mcp, _send_email  # MCP Server instance + email 輔助
 
 VENDOR_COLOR = {
     "7-11":    "#00833D",
@@ -716,9 +716,10 @@ def update_delivery_status(order_no: str, new_status: str, driver_name: str = ""
         con.execute("UPDATE mms_order_record SET status=? WHERE order_no=?", (new_status, order_no))
     # Auto-complete parent feedback if all records done
     if new_status == '03':
-        row = con.execute("SELECT feedback_no FROM mms_order_record WHERE order_no=?", (order_no,)).fetchone()
+        row = con.execute("SELECT feedback_no, vendor_name FROM mms_order_record WHERE order_no=?", (order_no,)).fetchone()
         if row:
-            fno = row["feedback_no"]
+            fno        = row["feedback_no"]
+            vname      = row["vendor_name"] if row["vendor_name"] else "門市"
             pending = con.execute(
                 "SELECT COUNT(*) FROM mms_order_record WHERE feedback_no=? AND status != '03'",
                 (fno,)
@@ -728,6 +729,25 @@ def update_delivery_status(order_no: str, new_status: str, driver_name: str = ""
                     "UPDATE pms_form_feedback SET status='已完成' WHERE feedback_no=?",
                     (fno,)
                 )
+            # 發送送達通知 Email
+            fb = con.execute(
+                "SELECT user_id, contact_name FROM pms_form_feedback WHERE feedback_no=?",
+                (fno,)
+            ).fetchone()
+            if fb and fb["user_id"]:
+                urow = con.execute(
+                    "SELECT email, username FROM users WHERE id=?", (fb["user_id"],)
+                ).fetchone()
+                if urow and urow["email"]:
+                    _send_email(
+                        to_email=urow["email"],
+                        subject=f"【統一生活管家】外送單 {order_no} 已送達",
+                        body=(
+                            f"您好 {urow['username']}，\n\n"
+                            f"您的外送單 {order_no}（諮詢單 {fno}）已由「{vname}」完成送達。\n\n"
+                            f"感謝您使用統一生活管家，期待再次為您服務！"
+                        ),
+                    )
     con.commit()
     con.close()
 
