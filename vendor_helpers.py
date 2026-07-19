@@ -431,12 +431,16 @@ def _db():
     return con
 
 
-def get_stats():
+def get_stats(vendor: str = ""):
     con = _db()
-    total        = con.execute("SELECT COUNT(*) FROM fitness_product").fetchone()[0]
-    out_of_stock = con.execute("SELECT COUNT(*) FROM fitness_product WHERE stock=0").fetchone()[0]
-    low_stock    = con.execute("SELECT COUNT(*) FROM fitness_product WHERE stock>0 AND stock<=30").fetchone()[0]
-    avg_protein  = con.execute("SELECT AVG(protein_g) FROM fitness_product").fetchone()[0] or 0
+    cond   = " WHERE vendor=?" if vendor else ""
+    params = (vendor,)        if vendor else ()
+    total        = con.execute(f"SELECT COUNT(*) FROM fitness_product{cond}", params).fetchone()[0]
+    out_of_stock = con.execute(f"SELECT COUNT(*) FROM fitness_product{cond} {'AND' if vendor else 'WHERE'} stock=0",
+                               params).fetchone()[0]
+    low_stock    = con.execute(f"SELECT COUNT(*) FROM fitness_product{cond} {'AND' if vendor else 'WHERE'} stock>0 AND stock<=30",
+                               params).fetchone()[0]
+    avg_protein  = con.execute(f"SELECT AVG(protein_g) FROM fitness_product{cond}", params).fetchone()[0] or 0
     pending      = con.execute("SELECT COUNT(*) FROM pms_form_feedback WHERE status='待處理'").fetchone()[0]
     delivering   = con.execute("SELECT COUNT(*) FROM pms_form_feedback WHERE status='配送中'").fetchone()[0]
     con.close()
