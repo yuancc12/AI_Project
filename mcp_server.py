@@ -1728,105 +1728,131 @@ def get_partner_vendors(category: str = "", county_code: str = "",
 # 工具 F：報名 Being Sport 健身課程（寫入操作，用戶確認後才能呼叫）
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def enroll_gym_course(course_name: str, contact_name: str, contact_phone: str,
+def enroll_gym_course(contact_name: str, contact_phone: str,
+                      course_name: str = "", course_names_json: str = "",
                       note: str = "", user_id: int = 0) -> str:
-    """替使用者報名指定的 Being Sport 健身課程，建立報名記錄並同步建立諮詢單。
+    """替使用者報名一或多個 Being Sport 健身課程，建立報名記錄並產生**一張**諮詢單。
 
-    【重要】這是寫入操作。呼叫前必須已告知用戶「將為您報名此課程」並獲得明確確認。
+    【重要】這是寫入操作。呼叫前必須已告知用戶「將為您報名課程」並獲得明確確認。
 
     參數:
-        course_name:   課程名稱（用戶說的課程名稱，工具自動查詢對應 ID）
-        contact_name:  報名人姓名（從系統提示的帳號名稱取得，不需詢問用戶）
-        contact_phone: 聯絡電話（從系統提示的聯絡電話取得；若未設定才詢問用戶）
-        note:          備注（過敏、舊傷、特殊需求，選填）
+        contact_name:      報名人姓名（從系統提示的帳號名稱取得，不需詢問用戶）
+        contact_phone:     聯絡電話（從系統提示取得；若未設定才詢問用戶）
+        course_name:       單一課程名稱（只報名一門課時使用）
+        course_names_json: 多課程時使用，JSON 陣列，例如 ["拳擊有氧","TRX 懸吊訓練"]
+                           有此參數時忽略 course_name
+        note:              備注（過敏、舊傷、特殊需求，選填）
 
     回傳:
-        JSON 字串，含報名編號 enrollment_id 與諮詢單編號 feedback_no。
+        JSON 字串，含諮詢單號 feedback_no 與每門課的報名結果。
     """
-    if not course_name or not course_name.strip():
-        return json.dumps({"success": False,
-                           "message": "課程名稱不能為空，請填入用戶想報名的課程名稱。"},
-                          ensure_ascii=False)
     if not contact_phone or not contact_phone.strip():
         return json.dumps({"success": False,
                            "message": "尚未收集到電話，請先詢問用戶的聯絡電話再呼叫此工具。"},
                           ensure_ascii=False)
 
+    # 解析課程名稱清單
+    names: list[str] = []
+    if course_names_json:
+        try:
+            names = json.loads(course_names_json)
+            if isinstance(names, str):
+                names = [names]
+        except Exception:
+            names = [course_names_json]
+    if not names and course_name:
+        names = [course_name.strip()]
+    if not names:
+        return json.dumps({"success": False,
+                           "message": "請提供課程名稱（course_name 或 course_names_json）。"},
+                          ensure_ascii=False)
+
     con = _db()
-    # 依課程名稱模糊查詢（本月優先）
     month_now = datetime.now().strftime("%Y%m")
-    row = con.execute("""
-        SELECT gc.*, pv.name AS gym_name
-        FROM gym_course gc
-        JOIN partner_vendor pv ON pv.id = gc.gym_id
-        WHERE gc.is_enable = 1 AND gc.course_name LIKE ?
-        ORDER BY (gc.month = ?) DESC, gc.id ASC
-        LIMIT 1
-    """, (f"%{course_name}%", month_now)).fetchone()
+    now_iso   = datetime.now().isoformat()
 
-    if not row:
+    # 查詢每門課程
+    courses_found, errors = [], []
+    for cn in names:
+        row = con.execute("""
+            SELECT gc.*, pv.name AS gym_name
+            FROM gym_course gc
+            JOIN partner_vendor pv ON pv.id = gc.gym_id
+            WHERE gc.is_enable = 1 AND gc.course_name LIKE ?
+            ORDER BY (gc.month = ?) DESC, gc.id ASC
+            LIMIT 1
+        """, (f"%{cn}%", month_now)).fetchone()
+        if not row:
+            errors.append(f"找不到「{cn}」課程")
+            continue
+        c = dict(row)
+        if c["enrolled"] >= c["max_slots"]:
+            errors.append(f"「{c['course_name']}」名額已滿")
+            continue
+        if c["status"] == "已取消":
+            errors.append(f"「{c['course_name']}」已取消")
+            continue
+        courses_found.append(c)
+
+    if not courses_found:
         con.close()
         return json.dumps({"success": False,
-                           "message": f"找不到名稱含「{course_name}」的課程，請確認課程名稱。"},
+                           "message": "所有課程均無法報名：" + "；".join(errors)},
                           ensure_ascii=False)
 
-    course = dict(row)
-    if course["enrolled"] >= course["max_slots"]:
-        con.close()
-        return json.dumps({"success": False,
-                           "message": f"「{course['course_name']}」名額已滿（{course['max_slots']}/{course['max_slots']}），無法報名。"},
-                          ensure_ascii=False)
-
-    if course["status"] == "已取消":
-        con.close()
-        return json.dumps({"success": False,
-                           "message": f"「{course['course_name']}」已取消，無法報名。"},
-                          ensure_ascii=False)
-
-    now_iso = datetime.now().isoformat()
-
-    # 建立諮詢單（pms_form_feedback）—— keyword 存 course_id，供後台接單時識別課程
+    # 建立一張諮詢單，goal 列出所有課程
     feedback_no = "FB" + datetime.now().strftime("%y%m%d") + uuid.uuid4().hex[:6].upper()
-    goal_text = f"課程報名：{course['gym_name']} {course['course_name']}"
+    gym_name    = courses_found[0]["gym_name"]
+    course_list = "、".join(c["course_name"] for c in courses_found)
+    goal_text   = f"課程報名：{gym_name} {course_list}"
+    # keyword 存逗號分隔的 course_id，供後台識別
+    keyword_str = ",".join(str(c["id"]) for c in courses_found)
+
     con.execute(
         "INSERT INTO pms_form_feedback "
         "(feedback_no,goal,keyword,contact_name,contact_phone,note,status,user_id,created_at) "
         "VALUES (?,?,?,?,?,?,'待處理',?,?)",
-        (feedback_no, goal_text, str(course["id"]), contact_name, contact_phone, note, user_id or 0, now_iso),
+        (feedback_no, goal_text, keyword_str, contact_name, contact_phone, note, user_id or 0, now_iso),
     )
 
-    # 建立報名記錄（course_enrollment）
-    con.execute(
-        "INSERT INTO course_enrollment "
-        "(course_id,feedback_no,contact_name,contact_phone,note,status,notified,enrolled_at) "
-        "VALUES (?,?,?,?,?,'報名中',0,?)",
-        (course["id"], feedback_no, contact_name, contact_phone, note, now_iso),
-    )
+    # 每門課各建一筆 enrollment
+    enrolled_courses = []
+    for c in courses_found:
+        con.execute(
+            "INSERT INTO course_enrollment "
+            "(course_id,feedback_no,contact_name,contact_phone,note,status,notified,enrolled_at) "
+            "VALUES (?,?,?,?,?,'報名中',0,?)",
+            (c["id"], feedback_no, contact_name, contact_phone, note, now_iso),
+        )
+        enrolled_courses.append({
+            "course_id":   c["id"],
+            "course_name": c["course_name"],
+            "weekday":     c["weekday"],
+            "time_start":  c["time_start"],
+            "price_month": c["price_month"],
+        })
     con.commit()
     con.close()
 
-    min_students = course["min_students"]
-    open_hint = (
-        f"目前課程開課門檻為 {min_students} 人，報名確認後將計入名額，"
-        f"後台同意報名後會主動通知您！"
+    detail_lines = "\n".join(
+        f"  ✅ 【{c['course_name']}】{c['weekday']} {c['time_start']}  NT${c['price_month']}/月"
+        for c in enrolled_courses
     )
+    error_lines = ("⚠️ 以下課程無法報名：" + "；".join(errors)) if errors else ""
 
     return json.dumps({
-        "success":     True,
-        "feedback_no": feedback_no,
-        "course_id":   course["id"],
-        "course_name": course["course_name"],
-        "gym_name":    course["gym_name"],
-        "weekday":     course["weekday"],
-        "time_start":  course["time_start"],
-        "price_month": course["price_month"],
+        "success":         True,
+        "feedback_no":     feedback_no,
+        "enrolled_count":  len(enrolled_courses),
+        "enrolled_courses": enrolled_courses,
+        "skipped_errors":  errors,
         "message": (
-            f"✅ 您的報名申請已提交！\n"
+            f"✅ 報名申請已提交！\n"
             f"📋 諮詢單號：{feedback_no}\n"
-            f"🏋️ 課程：「{course['gym_name']}」【{course['course_name']}】\n"
-            f"📅 上課時間：{course['weekday']} {course['time_start']}（每堂 {course['duration_min']} 分鐘）\n"
-            f"💰 月費：NT${course['price_month']}\n"
-            f"{open_hint}"
+            f"🏋️ 健身中心：{gym_name}\n"
+            f"{detail_lines}\n"
+            + (f"\n{error_lines}\n" if error_lines else "")
+            + f"\n後台確認後會主動通知您！"
         ),
     }, ensure_ascii=False)
 

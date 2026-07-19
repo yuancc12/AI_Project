@@ -515,18 +515,20 @@ with (tab2 if tab2 is not None else _null):
                                     (v_reply, _now_e, inq_id),
                                 )
                                 if _kw_e:
-                                    try:
-                                        _cid = int(_kw_e)
-                                        _ec.execute(
-                                            "UPDATE gym_course SET enrolled = enrolled + 1 WHERE id = ?",
-                                            (_cid,),
-                                        )
-                                        _ec.execute(
-                                            "UPDATE course_enrollment SET status = '已確認' WHERE feedback_no = ?",
-                                            (inq_id,),
-                                        )
-                                    except Exception:
-                                        pass
+                                    # keyword 可能是單一 id 或逗號分隔多個 id
+                                    for _kid in str(_kw_e).split(","):
+                                        try:
+                                            _cid = int(_kid.strip())
+                                            _ec.execute(
+                                                "UPDATE gym_course SET enrolled = enrolled + 1 WHERE id = ?",
+                                                (_cid,),
+                                            )
+                                        except Exception:
+                                            pass
+                                    _ec.execute(
+                                        "UPDATE course_enrollment SET status = '已確認' WHERE feedback_no = ?",
+                                        (inq_id,),
+                                    )
                                 _ec.commit()
                                 _ec.close()
                                 st.success("✅ 報名已確認！通知訊息已發送給用戶。")
