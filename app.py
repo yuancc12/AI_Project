@@ -1523,7 +1523,8 @@ elif st.session_state.stage == "inquiry_form":
                 emoji = VENDOR_EMOJI.get(vendor, "⚪")
                 st.markdown(f"#### {emoji} {vendor}")
                 for p in items:
-                    pid   = p.get("id", p.get("name", ""))
+                    pid      = p.get("id", p.get("name", ""))
+                    max_stock = int(p.get("stock", 1)) or 1
                     label = (
                         f"**{p.get('name', '')}** — "
                         f"💰 ${p.get('price', 0)} ｜ "
@@ -1531,8 +1532,17 @@ elif st.session_state.stage == "inquiry_form":
                         f"🔥 {p.get('calories', 0)} kcal ｜ "
                         f"📦 庫存 {p.get('stock', 0)}"
                     )
-                    if st.checkbox(label, value=True, key=f"chk_{pid}"):
-                        selected_products.append(p)
+                    col_chk, col_qty = st.columns([5, 1])
+                    checked = col_chk.checkbox(label, value=True, key=f"chk_{pid}")
+                    qty = col_qty.number_input(
+                        "數量", min_value=1, max_value=max_stock,
+                        value=1, step=1,
+                        key=f"qty_{pid}",
+                        label_visibility="collapsed",
+                        disabled=not checked,
+                    )
+                    if checked:
+                        selected_products.append({**p, "qty": int(qty)})
                 st.markdown("")
         else:
             st.info("本次對話未產生商品推薦清單，可直接送出諮詢單。")

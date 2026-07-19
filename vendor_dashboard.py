@@ -347,11 +347,19 @@ with (tab2 if tab2 is not None else _null):
                                         unsafe_allow_html=True,
                                     )
                                     for p in items:
+                                        _qty = p.get("qty", 1)
+                                        _qty_badge = (
+                                            f'<span style="background:#1976D2;color:white;'
+                                            f'border-radius:8px;padding:1px 7px;font-size:0.8rem;'
+                                            f'font-weight:700">x{_qty}</span> '
+                                            if _qty > 1 else ""
+                                        )
                                         st.markdown(
-                                            f"&nbsp;&nbsp;• **{p.get('name','')}** — "
+                                            f"&nbsp;&nbsp;• {_qty_badge}**{p.get('name','')}** — "
                                             f"${p.get('price',0)} ｜ "
                                             f"蛋白質 {p.get('protein_g',0)}g ｜ "
-                                            f"庫存 {p.get('stock',0)}"
+                                            f"庫存 {p.get('stock',0)}",
+                                            unsafe_allow_html=True,
                                         )
                                     st.markdown("")
                     except Exception:
@@ -986,9 +994,11 @@ if tab5 is not None:
                             brand_key = next((b for b in ["7-11", "萬家福", "康是美", "統一生機"] if b in vendor_br), "")
                             my_items  = [p for p in plist if not brand_key or p.get("vendor") == brand_key]
                             if my_items:
-                                with st.expander(f"📦 取貨商品（{len(my_items)} 項）"):
+                                total_qty = sum(p.get("qty", 1) for p in my_items)
+                                with st.expander(f"📦 取貨商品（{len(my_items)} 項 / 共 {total_qty} 件）"):
                                     for p in my_items:
-                                        st.markdown(f"• **{p.get('name','')}** — ${p.get('price',0)}")
+                                        _q = p.get("qty", 1)
+                                        st.markdown(f"• **{p.get('name','')}** × {_q} — ${p.get('price',0) * _q}")
                         except Exception:
                             pass
 
