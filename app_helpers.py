@@ -62,19 +62,37 @@ def check_login(username, password):
     return dict(row) if row else None
 
 
-def register_user(username, password, gender="", age=0,
-                  height_cm=0.0, weight_kg=0.0, fitness_goal="",
+def _ensure_users_columns():
+    """為舊版 DB 補上新欄位（ALTER TABLE 若欄位已存在會靜默失敗）。"""
+    con = _db()
+    for col, defn in [
+        ("birthday",     "TEXT NOT NULL DEFAULT ''"),
+        ("email",        "TEXT NOT NULL DEFAULT ''"),
+        ("dietary_pref", "TEXT NOT NULL DEFAULT ''"),
+    ]:
+        try:
+            con.execute(f"ALTER TABLE users ADD COLUMN {col} {defn}")
+        except Exception:
+            pass
+    con.commit(); con.close()
+
+_ensure_users_columns()
+
+
+def register_user(username, password, gender="", birthday="",
+                  height_cm=0.0, weight_kg=0.0,
+                  email="", dietary_pref="",
                   county_code="", district_code="",
                   address="", contact_phone=""):
     try:
         con = _db()
         con.execute(
             "INSERT INTO users "
-            "(username,password,gender,age,height_cm,weight_kg,fitness_goal,"
-            "county_code,district_code,address,contact_phone,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (username, password, gender, age, height_cm, weight_kg,
-             fitness_goal, county_code, district_code,
+            "(username,password,gender,birthday,height_cm,weight_kg,"
+            "email,dietary_pref,county_code,district_code,address,contact_phone,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (username, password, gender, birthday, height_cm, weight_kg,
+             email, dietary_pref, county_code, district_code,
              address, contact_phone, datetime.now().isoformat()),
         )
         con.commit(); con.close(); return True

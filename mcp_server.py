@@ -12,7 +12,10 @@ import os
 import sys
 import json
 import uuid
+import smtplib
 import requests
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import Optional
 from mcp.server import MCPServer
@@ -454,6 +457,60 @@ def submit_inquiry(goal: str, contact_name: str, contact_phone: str,
 
 
 # ---------------------------------------------------------------------------
+# Email 輔助（供 dispatch_delivery 及 send_email_notification 共用）
+# ---------------------------------------------------------------------------
+
+def _send_email(to_email: str, subject: str, body: str) -> bool:
+    """用環境變數設定的 SMTP 發信，成功回傳 True，失敗靜默回傳 False。
+    需在 .env 設定：SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS
+    """
+    host = os.getenv("SMTP_HOST", "")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER", "")
+    pwd  = os.getenv("SMTP_PASS", "")
+    if not (host and user and pwd):
+        return False
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = user
+        msg["To"]      = to_email
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        with smtplib.SMTP(host, port, timeout=10) as srv:
+            srv.ehlo()
+            srv.starttls()
+            srv.login(user, pwd)
+            srv.sendmail(user, [to_email], msg.as_string())
+        return True
+    except Exception:
+        return False
+
+
+@mcp.tool()
+def send_email_notification(to_email: str, subject: str, body: str) -> str:
+    """發送 Email 通知給指定收件人。
+    適用場景：接單通知、訂單狀態更新、系統公告等。
+    需在 .env 設定 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS。
+
+    參數:
+        to_email: 收件人 Email 地址，例如「user@example.com」
+        subject:  郵件主旨
+        body:     郵件內文（純文字）
+
+    回傳:
+        JSON：{"success": true/false, "message": "..."}
+    """
+    ok = _send_email(to_email, subject, body)
+    if ok:
+        return json.dumps({"success": True,  "message": f"Email 已發送至 {to_email}"},
+                          ensure_ascii=False)
+    smtp_set = bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_USER"))
+    reason = "SMTP 未設定，請在 .env 加入 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS" \
+             if not smtp_set else "SMTP 連線或發送失敗，請確認帳密與伺服器設定"
+    return json.dumps({"success": False, "message": reason}, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # 工具 5：後台接單並派送外送服務（寫入操作，由後台人員確認後呼叫）
 # ---------------------------------------------------------------------------
 @mcp.tool()
@@ -572,6 +629,28 @@ def dispatch_delivery(inquiry_no: str, vendor_name: str,
         (now_iso, stored_reply, inquiry_no),
     )
     con.commit()
+
+    # 自動發 Email 通知用戶
+    if user_id_val:
+        _urow = con.execute(
+            "SELECT email, username FROM users WHERE id=?", (user_id_val,)
+        ).fetchone()
+        if _urow and _urow["email"]:
+            _carrier = f"\n配送業者：{delivery_company}" if delivery_company else ""
+            _track   = f"\n追蹤單號：{tracking_no}"      if tracking_no    else ""
+            _eta = (f"{estimated_minutes // 60} 天" if estimated_minutes >= 60
+                    else f"{estimated_minutes} 分鐘")
+            _send_email(
+                to_email=_urow["email"],
+                subject=f"【統一生活管家】諮詢單 {inquiry_no} 已接單",
+                body=(
+                    f"您好 {_urow['username']}，\n\n"
+                    f"您的諮詢單 {inquiry_no} 已由「{vendor_name}」接單。\n"
+                    f"預計送達：{_eta}{_carrier}{_track}\n"
+                    + (f"\n廠商回覆：{full_reply}\n" if full_reply else "")
+                    + "\n感謝您使用統一生活管家！"
+                ),
+            )
     con.close()
 
     carrier_msg = f"（{delivery_company}）" if delivery_company and delivery_company != "自家配送" else ""

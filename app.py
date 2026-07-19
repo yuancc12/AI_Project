@@ -5,7 +5,7 @@ import json
 import asyncio
 import streamlit as st
 import anthropic
-from datetime import datetime
+from datetime import datetime, date
 from app_helpers import (
     DB_PATH, _db,
     check_login, register_user, get_my_inquiries, update_user_reply,
@@ -41,7 +41,7 @@ if os.path.exists(_env_file):
                 os.environ.setdefault(_k.strip(), _v.strip())
 
 try:
-    from streamlit_js_eval import get_geolocation as _get_geolocation
+    from streamlit_js_eval import streamlit_js_eval as _js_eval
     _HAS_GEO = True
 except ImportError:
     _HAS_GEO = False
@@ -76,6 +76,31 @@ OLLAMA_TOOLS = [
     }
     for t in CLAUDE_TOOLS
 ]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _reverse_geocode(lat: float, lng: float) -> str:
+    """Nominatim reverse geocoding，回傳繁中地址字串，失敗回傳空字串。"""
+    try:
+        import requests as _req
+        r = _req.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"format": "json", "lat": lat, "lon": lng, "accept-language": "zh-TW"},
+            headers={"User-Agent": "ai-life-butler/1.0"},
+            timeout=5,
+        )
+        if r.ok:
+            a = r.json().get("address", {})
+            parts = [
+                a.get("city") or a.get("county") or a.get("state"),
+                a.get("city_district") or a.get("suburb") or a.get("town"),
+                a.get("road") or a.get("pedestrian"),
+                a.get("house_number"),
+            ]
+            return "".join(p for p in parts if p)
+    except Exception:
+        pass
+    return ""
 
 
 def _guess_tw_city(lat: float, lng: float) -> str:
@@ -1076,36 +1101,53 @@ with st.sidebar:
         st.divider()
 
     # ── 位置偵測（JS 組件必須在 expander 外呼叫才能正常執行）────────────────────
+    # 自訂 JS：成功回傳 {coords}，失敗回傳 {error: code}
+    # 每次重新偵測 _geo_refresh_count +1 → 新 key → 組件重新掛載 → 重跑 JS
     if _HAS_GEO:
-        _loc = _get_geolocation()
+        _geo_key = f"geo_{st.session_state.get('_geo_refresh_count', 0)}"
+        _loc = _js_eval(
+            js_expressions="""
+                new Promise(resolve => navigator.geolocation.getCurrentPosition(
+                    p => resolve({coords: {latitude: p.coords.latitude, longitude: p.coords.longitude}}),
+                    e => resolve({error: e.code}),
+                    {maximumAge: 0, timeout: 10000}
+                ))
+            """,
+            key=_geo_key,
+        )
         if _loc and _loc.get("coords"):
             st.session_state.user_lat = _loc["coords"]["latitude"]
             st.session_state.user_lng = _loc["coords"]["longitude"]
+            st.session_state.pop("_geo_error", None)
+        elif _loc and _loc.get("error"):
+            st.session_state["_geo_error"] = _loc["error"]
 
     with st.expander("📍 我的位置", expanded=False):
         if st.session_state.get("user_lat"):
             lat, lng = st.session_state.user_lat, st.session_state.user_lng
-            st.success("已取得位置 ✅")
+            _addr = _reverse_geocode(round(lat, 5), round(lng, 5))
+            st.success(f"已取得位置 ✅")
+            if _addr:
+                st.caption(_addr)
             st.caption(f"緯度 {lat:.5f}　經度 {lng:.5f}")
             if st.button("🔄 重新偵測", key="geo_refresh", use_container_width=True):
                 st.session_state.user_lat = None
                 st.session_state.user_lng = None
+                st.session_state.pop("_geo_error", None)
+                st.session_state["_geo_refresh_count"] = st.session_state.get("_geo_refresh_count", 0) + 1
                 st.rerun()
         else:
-            if _HAS_GEO:
-                st.info("正在取得位置…請允許瀏覽器授權")
-            else:
+            if not _HAS_GEO:
                 st.warning("請安裝 streamlit-js-eval 以啟用位置功能")
                 st.code("uv pip install streamlit-js-eval")
-            with st.form("manual_location", clear_on_submit=False):
-                st.caption("或手動輸入座標（Google Maps 右鍵可複製）")
-                c1, c2 = st.columns(2)
-                m_lat = c1.number_input("緯度", value=25.0330, format="%.4f", step=0.0001)
-                m_lng = c2.number_input("經度", value=121.5654, format="%.4f", step=0.0001)
-                if st.form_submit_button("套用座標", use_container_width=True):
-                    st.session_state.user_lat = m_lat
-                    st.session_state.user_lng = m_lng
+            elif st.session_state.get("_geo_error") == 1:
+                st.error("位置授權遭拒，請在瀏覽器設定中允許此頁面存取位置，再重新偵測。")
+                if st.button("🔄 重新偵測", key="geo_retry", use_container_width=True):
+                    st.session_state.pop("_geo_error", None)
+                    st.session_state["_geo_refresh_count"] = st.session_state.get("_geo_refresh_count", 0) + 1
                     st.rerun()
+            else:
+                st.info("正在取得位置…請允許瀏覽器的授權請求")
 
     st.divider()
 
@@ -1191,10 +1233,11 @@ if st.session_state.stage == "login":
         def _load_profile(user: dict):
             """登入/註冊後把體能資料存入 session_state。"""
             st.session_state.user_gender        = user.get("gender", "")
-            st.session_state.user_age           = user.get("age", 0)
+            st.session_state.user_birthday      = user.get("birthday", "")
             st.session_state.user_height_cm     = float(user.get("height_cm", 0) or 0)
             st.session_state.user_weight_kg     = float(user.get("weight_kg", 0) or 0)
-            st.session_state.user_fitness_goal  = user.get("fitness_goal", "")
+            st.session_state.user_email         = user.get("email", "")
+            st.session_state.user_dietary_pref  = user.get("dietary_pref", "")
             st.session_state.user_county_code   = user.get("county_code", "")
             st.session_state.user_district_code = user.get("district_code", "")
             st.session_state.user_address       = user.get("address", "")
@@ -1219,75 +1262,83 @@ if st.session_state.stage == "login":
                     st.error("帳號或密碼錯誤，請再試一次。")
 
         with tab_reg:
-            ru = st.text_input("設定帳號 *", key="reg_u", placeholder="請輸入帳號")
-            rp = st.text_input("設定密碼 *", type="password", key="reg_p",
-                               placeholder="至少 4 個字元")
+            # ── 必填：帳號 / 密碼 ────────────────────────────────────────────
+            ru = st.text_input("帳號", key="reg_u", placeholder="請輸入帳號（至少 2 字元）")
+            rp = st.text_input("密碼", type="password", key="reg_p",
+                               placeholder="請設定密碼（至少 4 字元）")
+            reg_email = st.text_input("電子郵件", key="reg_email",
+                                      placeholder="example@email.com")
 
-            st.markdown("**體能資料（選填，幫助 AI 個人化建議）**")
-            rc1, rc2 = st.columns(2)
-            reg_gender = rc1.radio("性別", ["男", "女"], horizontal=True, key="reg_gender")
-            reg_age    = rc2.number_input("年齡（歲）", min_value=0, max_value=120,
-                                          value=0, step=1, key="reg_age")
-            rc3, rc4 = st.columns(2)
-            reg_height = rc3.number_input("身高（cm）", min_value=0.0, max_value=250.0,
-                                           value=0.0, step=0.5, key="reg_height")
-            reg_weight = rc4.number_input("體重（kg）", min_value=0.0, max_value=300.0,
-                                           value=0.0, step=0.5, key="reg_weight")
-            reg_goal = st.selectbox(
-                "健康目標",
-                ["（不設定）", "增肌", "減脂", "維持"],
-                key="reg_goal",
-            )
-            reg_phone   = st.text_input("聯絡電話（選填，作為諮詢單預設）", key="reg_phone", placeholder="例：0912345678")
+            # ── 選填：個人資料 ────────────────────────────────────────────────
+            with st.expander("👤 個人資料（選填）"):
+                rc1, rc2 = st.columns(2)
+                reg_gender   = rc1.radio("性別", ["男", "女"], horizontal=True, key="reg_gender")
+                reg_birthday = rc2.date_input("生日", value=None, key="reg_birthday",
+                                              min_value=date(1900, 1, 1))
+                rc3, rc4 = st.columns(2)
+                reg_height = rc3.number_input("身高（cm）", min_value=0.0, max_value=250.0,
+                                               value=0.0, step=0.5, key="reg_height")
+                reg_weight = rc4.number_input("體重（kg）", min_value=0.0, max_value=300.0,
+                                               value=0.0, step=0.5, key="reg_weight")
+                reg_dietary = st.selectbox(
+                    "飲食偏好",
+                    ["無限制", "素食", "純素（Vegan）", "無麩質", "清真（Halal）"],
+                    key="reg_dietary",
+                )
 
-            st.markdown("**配送地區（選填）**")
-            _counties = get_counties()
-            _county_names = ["（不選擇）"] + [f"{c[1]}" for c in _counties]
-            _county_codes = [""] + [c[0] for c in _counties]
-            _reg_county_idx = st.selectbox(
-                "縣市", range(len(_county_names)),
-                format_func=lambda i: _county_names[i],
-                key="reg_county",
-            )
-            _reg_county_code = _county_codes[_reg_county_idx]
-            if _reg_county_code:
-                _districts = get_districts(_reg_county_code)
-                if _districts:
-                    _dist_names = [d[1] for d in _districts]
-                    _dist_codes = [d[0] for d in _districts]
-                    _reg_dist_idx = st.selectbox(
-                        "行政區",
-                        range(len(_dist_names)),
-                        format_func=lambda i: _dist_names[i],
-                        key=f"reg_dist_{_reg_county_code}",
-                    )
-                    _reg_district_code = _dist_codes[_reg_dist_idx]
+            # ── 選填：聯絡與配送地區 ─────────────────────────────────────────
+            with st.expander("📦 聯絡與配送地區（選填）"):
+                reg_phone = st.text_input("聯絡電話", key="reg_phone",
+                                          placeholder="例：0912345678")
+                _counties = get_counties()
+                _county_names = ["（不選擇）"] + [c[1] for c in _counties]
+                _county_codes = [""]            + [c[0] for c in _counties]
+                _reg_county_idx = st.selectbox(
+                    "縣市", range(len(_county_names)),
+                    format_func=lambda i: _county_names[i],
+                    key="reg_county",
+                )
+                _reg_county_code = _county_codes[_reg_county_idx]
+                if _reg_county_code:
+                    _districts = get_districts(_reg_county_code)
+                    if _districts:
+                        _dist_names = [d[1] for d in _districts]
+                        _dist_codes = [d[0] for d in _districts]
+                        _reg_dist_idx = st.selectbox(
+                            "行政區",
+                            range(len(_dist_names)),
+                            format_func=lambda i: _dist_names[i],
+                            key=f"reg_dist_{_reg_county_code}",
+                        )
+                        _reg_district_code = _dist_codes[_reg_dist_idx]
+                    else:
+                        st.caption("此縣市的行政區資料尚未收錄。")
+                        _reg_district_code = ""
                 else:
-                    st.caption("此縣市的行政區資料尚未收錄。")
                     _reg_district_code = ""
-            else:
-                _reg_district_code = ""
+                reg_address = st.text_input(
+                    "詳細地址",
+                    key="reg_address",
+                    placeholder="例：忠孝東路四段 X 號 X 樓",
+                )
 
-            reg_address = st.text_input(
-                "詳細地址（選填，後續可修改）",
-                key="reg_address",
-                placeholder="例：忠孝東路四段X號X樓",
-            )
-
+            # ── 送出 ─────────────────────────────────────────────────────────
             if st.button("註冊並登入", type="primary", use_container_width=True, key="btn_reg"):
                 if len(ru.strip()) < 2:
-                    st.error("帳號至少 2 個字元。")
+                    st.error("帳號至少需要 2 個字元。")
                 elif len(rp.strip()) < 4:
-                    st.error("密碼至少 4 個字元。")
+                    st.error("密碼至少需要 4 個字元。")
                 else:
-                    goal_val = "" if reg_goal == "（不設定）" else reg_goal
+                    _bday_str = reg_birthday.isoformat() if reg_birthday else ""
+                    _diet_val = "" if reg_dietary == "無限制" else reg_dietary
                     ok = register_user(
                         ru.strip(), rp.strip(),
                         gender=reg_gender,
-                        age=int(reg_age),
+                        birthday=_bday_str,
                         height_cm=float(reg_height),
                         weight_kg=float(reg_weight),
-                        fitness_goal=goal_val,
+                        email=reg_email.strip(),
+                        dietary_pref=_diet_val,
                         county_code=_reg_county_code,
                         district_code=_reg_district_code,
                         address=reg_address.strip(),
