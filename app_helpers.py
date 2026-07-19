@@ -886,12 +886,13 @@ def _compact_history(history: list) -> list:
 
 
 def _sanitize_for_openai(msgs: list) -> list:
-    """Remove assistant+tool_calls that don't have complete tool_result responses.
+    """移除不合法的 tool/tool_calls 訊息，防止 API 400 錯誤。
 
-    Uses ID matching so partial tool_result batches (some but not all IDs answered)
-    are also detected and removed, even when tool messages are interleaved.
+    處理兩種情況：
+    1. assistant+tool_calls 存在但 tool result 不完整（原本邏輯）
+    2. role:tool 存在但前面的 assistant+tool_calls 被 compact 刪掉（孤立 tool result）
     """
-    # Pass 1: find all tool_call IDs and tool_result IDs in the history
+    # Pass 1: 收集所有 call ID 與 result ID
     all_call_ids: set[str] = set()
     all_result_ids: set[str] = set()
     for m in msgs:
@@ -902,18 +903,22 @@ def _sanitize_for_openai(msgs: list) -> list:
         elif role == "tool":
             all_result_ids.add(m.get("tool_call_id", ""))
 
+    # 無配對的 call（有呼叫但無回應）
     incomplete_ids = all_call_ids - all_result_ids
-    if not incomplete_ids:
-        return msgs  # 全部配對完整，直接回傳
+    # 孤立的 result（有回應但對應的 call 不存在 ← compact 後常見）
+    orphan_ids = all_result_ids - all_call_ids
 
-    # Pass 2: 移除含不完整 tool_call_id 的 assistant 訊息及其 tool 回應
+    if not incomplete_ids and not orphan_ids:
+        return msgs  # 全部配對完整
+
+    # Pass 2: 標記需要跳過的 ID（不完整的 call 整組跳過）
     skip_ids: set[str] = set()
     for m in msgs:
         role = m.get("role", "")
         if role == "assistant" and m.get("tool_calls"):
             call_ids = {tc.get("id", "") for tc in m["tool_calls"]}
             if call_ids & incomplete_ids:
-                skip_ids |= call_ids  # 整組都跳過
+                skip_ids |= call_ids
 
     out = []
     for m in msgs:
@@ -922,7 +927,9 @@ def _sanitize_for_openai(msgs: list) -> list:
             call_ids = {tc.get("id", "") for tc in m["tool_calls"]}
             if call_ids & skip_ids:
                 continue
-        elif role == "tool" and m.get("tool_call_id", "") in skip_ids:
-            continue
+        elif role == "tool":
+            tid = m.get("tool_call_id", "")
+            if tid in skip_ids or tid in orphan_ids:  # 孤立的 tool result 也一起移除
+                continue
         out.append(m)
     return out
