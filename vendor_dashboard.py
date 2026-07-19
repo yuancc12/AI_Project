@@ -370,18 +370,43 @@ with (tab2 if tab2 is not None else _null):
                                 _icols[_ii % 3].caption(f"📎 {_ip}")
 
                 # ── 雙向訊息紀錄 ─────────────────────────────────────────────
-                _v_lines = [l.strip() for l in inq.get("vendor_reply", "").split("\n") if l.strip()]
-                _u_lines = [l.strip() for l in inq.get("user_reply",   "").split("\n") if l.strip()]
-                _msg_total = len(_v_lines) + len(_u_lines)
+                import re as _re
+                def _parse_msg_lines(text, role):
+                    out = []
+                    for l in text.split("\n"):
+                        l = l.strip()
+                        if not l:
+                            continue
+                        m = _re.match(r'^(\d{2}/\d{2} \d{2}:\d{2})\s*\[.*?\]:\s*(.*)', l)
+                        if m:
+                            out.append((m.group(1), role, m.group(2).strip()))
+                        else:
+                            out.append(("", role, l))
+                    return out
+
+                _all_msgs = (
+                    _parse_msg_lines(inq.get("vendor_reply", ""), "vendor") +
+                    _parse_msg_lines(inq.get("user_reply",   ""), "user")
+                )
+                _all_msgs.sort(key=lambda x: x[0])
+                _msg_total = len(_all_msgs)
+
                 with st.expander(f"💬 訂單訊息（{_msg_total} 則）", expanded=_msg_total > 0):
-                    if _v_lines or _u_lines:
-                        for _line in _v_lines:
-                            if status == "已拒絕" and _v_lines.index(_line) == 0:
-                                st.warning(f"🏪 {_line}")
+                    if _all_msgs:
+                        for _ts, _role, _content in _all_msgs:
+                            if _role == "vendor":
+                                with st.chat_message("assistant"):
+                                    if status == "已拒絕" and _all_msgs.index((_ts, _role, _content)) == 0:
+                                        st.error(_content)
+                                    else:
+                                        st.write(_content)
+                                    if _ts:
+                                        st.caption(f"🏪 商家　{_ts}")
                             else:
-                                st.info(f"🏪 {_line}")
-                        for _line in _u_lines:
-                            st.success(f"👤 {_line}")
+                                with st.chat_message("user"):
+                                    st.write(_content)
+                                    if _ts:
+                                        st.caption(f"👤 用戶　{_ts}")
                         st.divider()
                     else:
                         st.caption("尚無訊息紀錄")
@@ -780,10 +805,10 @@ with (tab3 if tab3 is not None else _null):
 # ══════════════════════════════════════════════════════════════════════════════
 
 with (tab4 if tab4 is not None else _null):
-    st.markdown("#### 本系統共整合 14 個 MCP 工具，由 FastMCP（fitness-grocery）提供。")
+    st.markdown("#### 本系統共整合 18 個 MCP 工具，由 FastMCP（fitness-grocery）提供。")
     st.caption(
         "前端 AI（Ollama qwen2.5:7b 或 Claude claude-sonnet-4-6）透過 **mcp.Client** 真實呼叫工具；"
-        "後台 AI 助手也使用相同機制呼叫 dispatch_delivery。"
+        "後台 AI 助手也使用相同機制呼叫 dispatch_delivery 與 send_email_notification。"
         "寫入工具需用戶或後台人員明確確認後才執行。"
     )
     st.divider()
@@ -844,6 +869,8 @@ with (tab4 if tab4 is not None else _null):
               Ollama qwen2.5:7b（後台 AI）
                         │
                         └─▶ [工具05] dispatch_delivery  🔴 建立外送單 + 扣庫存
+                                        │
+                                        ├─▶ [工具18] send_email_notification 🔴 自動發接單通知 Email
                                         │
                                         ▼
                               外送單 YYMMDDxxxxxxxx 建立（status=01 待取件）

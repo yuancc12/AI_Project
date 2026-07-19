@@ -181,6 +181,12 @@ MCP_TOOLS = [
                    "「哪裡可以打羽球/籃球」「運動場館在哪」等問題時呼叫。"
                    "私人商業健身房改用 find_nearby_stores；Being Sport 課程改用 get_gym_courses。",
     },
+    {
+        "no": 18, "name": "send_email_notification",
+        "type": "🔴 寫入", "caller": "後台 AI 助手 / dispatch_delivery 自動觸發",
+        "desc": "透過 SMTP 發送 Email 通知給指定收件人。dispatch_delivery 接單成功後自動查詢用戶 Email 並發送接單通知；後台 AI 助手也可主動呼叫發送任意通知信。需在 .env 設定 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS。",
+        "trigger": "①接單後自動觸發（dispatch_delivery 內部呼叫）；②後台人員指示 AI 助手「發信通知用戶」時呼叫。",
+    },
 ]
 
 
