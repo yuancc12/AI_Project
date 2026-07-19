@@ -69,7 +69,7 @@ if _col_out.button("登出", key="v_logout"):
     for _k in ["vendor_id", "vendor_store", "vendor_brand"]:
         st.session_state[_k] = None
     st.rerun()
-st.caption(f"統一集團 × MCP Server ✦ 商品庫存 · 採買諮詢 · 外送派送 ｜ 後台 AI：{OLLAMA_MODEL} + mcp.Client")
+st.caption("統一集團 × MCP Server ✦ 商品庫存 · 採買諮詢 · 外送派送 ｜ 後台 AI + mcp.Client")
 
 # ── 品牌判斷（頁籤與統計共用） ────────────────────────────────────────────────
 
@@ -722,13 +722,13 @@ with (tab2 if tab2 is not None else _null):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — AI 派送助手（Ollama + 真實 MCP）
+# TAB 3 — AI 派送助手（真實 MCP）
 # ══════════════════════════════════════════════════════════════════════════════
 
 with (tab3 if tab3 is not None else _null):
-    st.markdown(f"#### 🤖 AI 派送助手 — {OLLAMA_MODEL} + mcp.Client")
+    st.markdown("#### 🤖 AI 派送助手 + mcp.Client")
     st.caption(
-        "透過 Ollama 本地模型對話，AI 自動呼叫 `dispatch_delivery` MCP 工具完成派送。\n\n"
+        "透過 AI 對話自動呼叫 `dispatch_delivery` MCP 工具完成派送。\n\n"
         "範例：「請幫諮詢單 FB260708XXXXXX 安排萬家福信義店配送，40分鐘」"
     )
     st.divider()
@@ -771,7 +771,7 @@ with (tab3 if tab3 is not None else _null):
             st.markdown(admin_prompt)
 
         with st.chat_message("assistant", avatar="🤖"):
-            with st.spinner(f"🤖 {OLLAMA_MODEL} 透過 MCP 處理中..."):
+            with st.spinner("🤖 AI 透過 MCP 處理中..."):
                 reply, tool_log, updated = admin_ollama_chat(
                     admin_prompt, st.session_state.admin_ollama_history
                 )
@@ -815,7 +815,7 @@ with (tab3 if tab3 is not None else _null):
 with (tab4 if tab4 is not None else _null):
     st.markdown("#### 本系統共整合 18 個 MCP 工具，由 FastMCP（fitness-grocery）提供。")
     st.caption(
-        "前端 AI（Ollama qwen2.5:7b 或 Claude claude-sonnet-4-6）透過 **mcp.Client** 真實呼叫工具；"
+        "前端 AI（Claude claude-sonnet-4-6）透過 **mcp.Client** 真實呼叫工具；"
         "後台 AI 助手也使用相同機制呼叫 dispatch_delivery 與 send_email_notification。"
         "寫入工具需用戶或後台人員明確確認後才執行。"
     )
@@ -874,7 +874,7 @@ with (tab4 if tab4 is not None else _null):
                         │
               後台管理員 → AI 派送助手（Tab 3）
                         │
-              Ollama qwen2.5:7b（後台 AI）
+              後台 AI 助手
                         │
                         └─▶ [工具05] dispatch_delivery  🔴 建立外送單 + 扣庫存
                                         │
