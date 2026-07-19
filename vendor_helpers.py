@@ -747,21 +747,35 @@ def _ensure_vendor_users():
         )
     """)
     con.commit()
+    # 加 address 欄位（舊資料庫相容）
+    try:
+        con.execute("ALTER TABLE vendor_users ADD COLUMN address TEXT NOT NULL DEFAULT ''")
+        con.commit()
+    except Exception:
+        pass
+
+    # (username, password, store_name, brand, address)
     for row in [
-        ("7-11-A",      "vendor123", "7-11 A門市",             "7-11"),
-        ("7-11-B",      "vendor123", "7-11 B門市",             "7-11"),
-        ("wanjiafu",    "vendor123", "萬家福信義店",             "萬家福"),
-        ("cosmed",      "vendor123", "康是美中山店",             "康是美"),
-        ("beingsport",  "gym123",   "Being Sport 健身中心",    "健身房"),
-        ("driver1",     "driver123", "外送員 小明",             "外送員"),
-        ("driver2",     "driver123", "外送員 小華",             "外送員"),
-        ("admin",       "admin123", "管理員",                  "全部"),
+        ("7-11-A",     "vendor123", "7-11 A門市",          "7-11",   "台北市信義區松仁路28號"),
+        ("7-11-B",     "vendor123", "7-11 B門市",          "7-11",   "台北市信義區基隆路一段200號"),
+        ("wanjiafu",   "vendor123", "萬家福信義店",          "萬家福", "台北市信義區忠孝東路五段68號"),
+        ("cosmed",     "vendor123", "康是美中山店",          "康是美", "台北市中山區南京東路二段100號"),
+        ("beingsport", "gym123",   "Being Sport 健身中心", "健身房", "台北市信義區松高路11號"),
+        ("driver1",    "driver123", "外送員 小明",          "外送員", ""),
+        ("driver2",    "driver123", "外送員 小華",          "外送員", ""),
+        ("admin",      "admin123", "管理員",               "全部",   ""),
     ]:
         con.execute(
             "INSERT OR IGNORE INTO vendor_users "
-            "(username,password,store_name,brand,created_at) VALUES (?,?,?,?,?)",
+            "(username,password,store_name,brand,address,created_at) VALUES (?,?,?,?,?,?)",
             (*row, datetime.now().isoformat()),
         )
+        # 更新既有列的地址（若為空）
+        if row[4]:
+            con.execute(
+                "UPDATE vendor_users SET address=? WHERE username=? AND (address IS NULL OR address='')",
+                (row[4], row[0]),
+            )
     con.commit(); con.close()
 
 _ensure_vendor_users()

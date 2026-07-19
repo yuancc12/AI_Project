@@ -991,6 +991,11 @@ if tab5 is not None:
                                         _vname = dl.get("vendor_name", "")
                                         _vkey  = _vname.split("門市")[0].split("信義")[0].split("中山")[0].strip()
                                         _con = _db()
+                                        _vu = _con.execute(
+                                            "SELECT address FROM vendor_users "
+                                            "WHERE store_name=? AND address!='' LIMIT 1",
+                                            (_vname,)
+                                        ).fetchone()
                                         _sv = _con.execute(
                                             "SELECT address FROM cms_homepage_service_vendor "
                                             "WHERE name LIKE ? AND is_enable=1 AND address!='' LIMIT 1",
@@ -1003,7 +1008,8 @@ if tab5 is not None:
                                         ).fetchone()
                                         _con.close()
                                         _vaddr = (
-                                            (_sv["address"] if _sv else None)
+                                            (_vu["address"] if _vu else None)
+                                            or (_sv["address"] if _sv else None)
                                             or (_pv["address"] if _pv else None)
                                             or f"{_vname} 台灣"
                                         )
