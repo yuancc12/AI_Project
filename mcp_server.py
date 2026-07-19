@@ -695,17 +695,29 @@ def find_route(stops_json: str, dest_lat: float = 0, dest_lng: float = 0, dest_a
     NOM_HDR = {"User-Agent": "FitnessGroceryBot/1.0 (Hackathon)"}
 
     def _geocode(address: str):
-        try:
-            r = requests.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": address, "format": "json", "limit": 1, "countrycodes": "tw"},
-                headers=NOM_HDR, timeout=6,
-            )
-            results = r.json()
-            if results:
-                return float(results[0]["lat"]), float(results[0]["lon"])
-        except Exception:
-            pass
+        import re as _re
+        # Build candidate list: full address first, then county+district fallback
+        candidates = [address]
+        m = _re.match(r'^(.{2,5}[市縣].{2,4}[區鄉鎮市])', address)
+        if m and m.group(1) != address:
+            candidates.append(m.group(1))
+        # Also try just county if district fallback still fails
+        m2 = _re.match(r'^(.{2,5}[市縣])', address)
+        if m2 and m2.group(1) not in candidates:
+            candidates.append(m2.group(1))
+
+        for cand in candidates:
+            try:
+                r = requests.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={"q": cand, "format": "json", "limit": 1, "countrycodes": "tw"},
+                    headers=NOM_HDR, timeout=6,
+                )
+                results = r.json()
+                if results:
+                    return float(results[0]["lat"]), float(results[0]["lon"])
+            except Exception:
+                pass
         return None, None
 
     def _dist(lat1, lng1, lat2, lng2):
