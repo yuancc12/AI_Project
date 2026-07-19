@@ -1008,9 +1008,16 @@ if tab5 is not None:
                                             or f"{_vname} 台灣"
                                         )
                                         stops = [{"name": _vname, "address": _vaddr}]
+                                        # 組合完整地址（縣市＋區＋街道），提升 Nominatim 命中率
+                                        _county = dl.get("county_name", "")
+                                        _dist   = dl.get("district_name", "")
+                                        _full_addr = (
+                                            (_county + _dist + addr) if (_county and addr)
+                                            else (addr + " 台灣" if addr else "")
+                                        )
                                         _rr = json.loads(_find_route(
                                             stops_json=json.dumps(stops, ensure_ascii=False),
-                                            dest_address=addr,
+                                            dest_address=_full_addr,
                                         ))
                                         st.session_state[f"route_{order_no}"] = _rr
                                     except Exception as e:
