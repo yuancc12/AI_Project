@@ -263,22 +263,30 @@ with (tab2 if tab2 is not None else _null):
             s_color  = scfg["color"]
             inq_id   = inq["feedback_no"]
 
+            # 卡片間距
+            st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
+
+            _dtype = inq.get("delivery_type") or "外送"
+            _dtcfg = DELIVERY_TYPE_CFG.get(_dtype, DELIVERY_TYPE_CFG["外送"])
+
             with st.container(border=True):
-                # ── 第一行：狀態 + 配送方式 + 單號 + 時間 ──────────────────
-                _dtype = inq.get("delivery_type") or "外送"
-                _dtcfg = DELIVERY_TYPE_CFG.get(_dtype, DELIVERY_TYPE_CFG["外送"])
-                h1, h2, h3 = st.columns([4, 4, 2])
-                h1.markdown(
+                # ── 卡片 Header：顏色條 + 狀態標籤 + 單號 + 時間 ────────────
+                st.markdown(
+                    f'<div style="background:{s_color}22;border-left:5px solid {s_color};'
+                    f'border-radius:4px;padding:8px 12px;margin-bottom:8px;'
+                    f'display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
                     f'<span style="background:{s_color};color:white;border-radius:12px;'
-                    f'padding:3px 10px;font-size:0.82rem;font-weight:700">'
+                    f'padding:3px 10px;font-size:0.82rem;font-weight:700;white-space:nowrap">'
                     f'{s_icon} {status}</span>'
-                    f'&nbsp;<span style="background:{_dtcfg["color"]};color:white;border-radius:10px;'
-                    f'padding:2px 8px;font-size:0.78rem;font-weight:700">'
-                    f'{_dtcfg["icon"]} {_dtcfg["label"]}</span>',
+                    f'<span style="background:{_dtcfg["color"]};color:white;border-radius:10px;'
+                    f'padding:2px 8px;font-size:0.78rem;font-weight:700;white-space:nowrap">'
+                    f'{_dtcfg["icon"]} {_dtcfg["label"]}</span>'
+                    f'<span style="font-weight:700;font-family:monospace;font-size:0.9rem">{inq_id}</span>'
+                    f'<span style="margin-left:auto;color:#888;font-size:0.78rem">'
+                    f'{str(inq.get("created_at",""))[:16]}</span>'
+                    f'</div>',
                     unsafe_allow_html=True,
                 )
-                h2.markdown(f"**`{inq_id}`**")
-                h3.caption(str(inq.get("created_at", ""))[:16])
 
                 # ── 第二行：地址資訊 ─────────────────────────────────────────
                 _addr = inq.get("address", "")
