@@ -312,12 +312,12 @@ def recommend_high_protein(budget: int, goal: str = "") -> str:
     else:
         candidates.sort(key=lambda p: -p["protein_g"])
 
-    # 貪婪選法：在總預算內選最多蛋白質的組合
+    # 貪婪選法：在總預算內選最多蛋白質的組合，每項加 qty 欄位
     selected = []
     remaining = budget
     for p in candidates:
         if p["price"] <= remaining:
-            selected.append(p)
+            selected.append({**p, "qty": 1})
             remaining -= p["price"]
 
     total_protein = round(sum(p["protein_g"] for p in selected), 1)
@@ -568,14 +568,17 @@ def dispatch_delivery(inquiry_no: str, vendor_name: str,
             except Exception:
                 pass
 
-    # 扣除庫存（每項 -1，最低到 0）
+    # 扣除庫存：優先用 qty 欄位；無 qty 時統計同一 id 出現次數
+    _qty_map: dict = {}
     for p in products:
         pid = p.get("id")
         if pid:
-            con.execute(
-                "UPDATE fitness_product SET stock = MAX(0, stock - 1) WHERE id = ?",
-                (pid,),
-            )
+            _qty_map[pid] = _qty_map.get(pid, 0) + int(p.get("qty", 1))
+    for pid, qty in _qty_map.items():
+        con.execute(
+            "UPDATE fitness_product SET stock = MAX(0, stock - ?) WHERE id = ?",
+            (qty, pid),
+        )
 
     # 查詢 service_vendor_id / service_id（依廠商名稱模糊比對）
     sv_row = con.execute(
