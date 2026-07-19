@@ -16,6 +16,7 @@ from vendor_helpers import (
     _db, get_stats, get_products, update_stock,
     get_inquiries, reject_inquiry, reserve_inquiry,
     get_brand_stores, get_dispatches, get_active_deliveries, update_delivery_status,
+    update_product,
     get_gym_id_for_store, get_being_sport_gyms, get_gym_courses_for_dashboard,
     get_enrollments_for_course, update_course_min_students, update_course_max_slots,
     open_course_and_notify, cancel_course, add_gym_course,
@@ -210,21 +211,30 @@ if tab1 is not None:
                         )
 
                     with col_btn:
-                        if st.button("修改庫存", key=f"edit_{p['id']}"):
+                        if st.button("✏️ 編輯", key=f"edit_{p['id']}"):
                             st.session_state[f"editing_{p['id']}"] = True
 
                     if st.session_state.get(f"editing_{p['id']}"):
                         with st.form(f"form_{p['id']}"):
-                            new_stock = st.number_input(
-                                f"「{p['name']}」新庫存", min_value=0, max_value=9999, value=stock
-                            )
+                            st.markdown(f"**✏️ 編輯商品：{p['name']}**")
+                            e1, e2 = st.columns(2)
+                            new_name  = e1.text_input("商品名稱", value=p["name"])
+                            _cat_opts = ["蛋白質", "主食", "蔬果", "乳製品", "保健品", "即食"]
+                            new_cat   = e2.selectbox("分類", _cat_opts,
+                                                     index=_cat_opts.index(p["category"]) if p["category"] in _cat_opts else 0)
+                            e3, e4, e5, e6 = st.columns(4)
+                            new_price    = e3.number_input("售價 ($)", min_value=0, max_value=99999, value=int(p["price"]))
+                            new_stock_v  = e4.number_input("庫存",     min_value=0, max_value=99999, value=int(p["stock"]))
+                            new_protein  = e5.number_input("蛋白質 (g)", min_value=0.0, max_value=999.0,
+                                                            value=float(p["protein_g"]), step=0.1, format="%.1f")
+                            new_calories = e6.number_input("熱量 (kcal)", min_value=0, max_value=9999, value=int(p["calories"]))
                             c1, c2 = st.columns(2)
                             save   = c1.form_submit_button("✅ 儲存", type="primary")
                             cancel = c2.form_submit_button("取消")
                         if save:
-                            update_stock(p["id"], new_stock)
+                            update_product(p["id"], new_name, new_cat, new_protein, new_calories, new_price, new_stock_v)
                             st.session_state[f"editing_{p['id']}"] = False
-                            st.success(f"已更新「{p['name']}」庫存為 {new_stock}")
+                            st.success(f"已更新「{new_name}」")
                             st.rerun()
                         if cancel:
                             st.session_state[f"editing_{p['id']}"] = False

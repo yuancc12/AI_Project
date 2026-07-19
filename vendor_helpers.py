@@ -466,6 +466,14 @@ def update_stock(product_id, new_stock):
     con = _db()
     con.execute("UPDATE fitness_product SET stock=? WHERE id=?", (new_stock, product_id))
     con.commit()
+
+def update_product(product_id, name, category, protein_g, calories, price, stock):
+    con = _db()
+    con.execute(
+        "UPDATE fitness_product SET name=?, category=?, protein_g=?, calories=?, price=?, stock=? WHERE id=?",
+        (name, category, float(protein_g), int(calories), int(price), int(stock), product_id),
+    )
+    con.commit()
     con.close()
 
 
