@@ -622,11 +622,12 @@ CLAUDE_TOOLS = [
     {
         "name": "enroll_gym_course",
         "description": (
-            "替用戶報名指定的 Being Sport 健身課程（寫入操作）。\n"
+            "替用戶報名指定的 Being Sport 健身課程（寫入操作）。每次只報名一個課程。\n"
+            "【多課程】用戶要報名 N 個課程時，必須依序呼叫此工具 N 次，每次帶不同 course_name，全部完成後再回覆用戶。\n"
             "course_name 填用戶說的課程名稱即可，工具自動查 ID，禁止呼叫 get_gym_courses。\n"
             "contact_name 從系統提示的帳號名稱取得，不需詢問用戶。\n"
             "contact_phone 從系統提示取得；若未設定才詢問用戶。\n"
-            "【流程】用戶說要報名 → 確認課程與電話 → 呼叫此工具。嚴禁未確認就寫入。"
+            "【流程】用戶說要報名 → 確認課程與電話 → 逐一呼叫此工具。嚴禁未確認就寫入。"
         ),
         "input_schema": {
             "type": "object",
@@ -709,7 +710,7 @@ SYSTEM_PROMPT = """\
 | 描述今天吃了什麼 | 逐項 `analyze_meal_nutrition` → 加總 → `recommend_after_meal` |
 | 問 TDEE、每日熱量需求 | `calculate_tdee(user_id=...)` |
 | 問健身課程、運動課、Being Sport 課表 | `get_gym_courses()` 取全部課程，AI 再推薦 |
-| 用戶確認要報名某課程（已知 course_id、姓名、電話） | `enroll_gym_course(course_id, contact_name, contact_phone)` |
+| 用戶確認要報名課程 | 每個課程**分別呼叫一次** `enroll_gym_course`，報名 N 個課程就呼叫 N 次，每次帶不同 `course_name`，禁止只呼叫一次就結束 |
 | 問游泳池、體育館、運動中心、公共運動場館 | `find_sports_venues(keyword, county_code)` — 公共場館資訊 |
 | 問附近門市/餐廳/咖啡廳/商業健身房等地點 | `find_nearby_stores(name, category)` — AI 自行判斷帶入 |
 | 問天氣、要不要出門 | `get_weather()`，系統自動注入 GPS |
