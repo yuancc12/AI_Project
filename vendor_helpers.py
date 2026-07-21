@@ -455,7 +455,51 @@ def get_stats(vendor: str = ""):
     return total, out_of_stock, low_stock, round(avg_protein, 1), pending, delivering
 
 
-def get_products(vendor=None, category=None, low_stock_only=False):
+def get_chart_data():
+    """管理員圖表用：各品牌庫存 + 諮詢單狀態分佈 + 本月課程報名數"""
+    con = _db()
+    # 各品牌商品庫存總量
+    rows = con.execute(
+        "SELECT vendor, SUM(stock) as total_stock FROM fitness_product GROUP BY vendor ORDER BY total_stock DESC"
+    ).fetchall()
+    stock_by_brand = {r["vendor"]: r["total_stock"] for r in rows}
+
+    # 諮詢單狀態分佈
+    rows2 = con.execute(
+        "SELECT status, COUNT(*) as cnt FROM pms_form_feedback GROUP BY status"
+    ).fetchall()
+    orders_by_status = {r["status"]: r["cnt"] for r in rows2}
+
+    # 本月各課程報名數
+    rows3 = con.execute("""
+        SELECT gc.name, COUNT(ce.id) as enrolled
+        FROM gym_course gc
+        LEFT JOIN course_enrollment ce ON ce.course_id = gc.id
+        GROUP BY gc.id, gc.name
+        ORDER BY enrolled DESC
+        LIMIT 8
+    """).fetchall()
+    enrollments = {r["name"]: r["enrolled"] for r in rows3}
+
+    # 各品牌諮詢單數（解析 products_json）
+    rows4 = con.execute(
+        "SELECT products_json FROM pms_form_feedback WHERE products_json IS NOT NULL AND products_json != '' AND products_json != '[]'"
+    ).fetchall()
+    import json as _json
+    orders_by_brand: dict = {}
+    for r in rows4:
+        try:
+            items = _json.loads(r["products_json"])
+            for item in items:
+                v = item.get("vendor", "其他")
+                orders_by_brand[v] = orders_by_brand.get(v, 0) + 1
+        except Exception:
+            pass
+
+    con.close()
+    return stock_by_brand, orders_by_status, enrollments, orders_by_brand
+
+def get_products(vendor=None, category=None, low_stock_only=False, search=None):
     con = _db()
     sql, params = "SELECT * FROM fitness_product WHERE 1=1", []
     if vendor:
@@ -464,6 +508,8 @@ def get_products(vendor=None, category=None, low_stock_only=False):
         sql += " AND category=?"; params.append(category)
     if low_stock_only:
         sql += " AND stock <= 30"
+    if search:
+        sql += " AND name LIKE ?"; params.append(f"%{search}%")
     sql += " ORDER BY vendor, category, protein_g DESC"
     rows = con.execute(sql, params).fetchall()
     con.close()

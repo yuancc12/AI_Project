@@ -1853,6 +1853,43 @@ elif st.session_state.stage == "my_orders":
                 h2.markdown(f"**`{inq_id}`**")
                 h3.caption(str(inq.get("created_at", ""))[:16])
 
+                # ── 進度條 ────────────────────────────────────────────────────
+                _is_ins = "保險" in (inq.get("goal") or "")
+                if _is_ins:
+                    _steps = ["待處理", "待簽名", "待後台確認", "已完成"]
+                else:
+                    _steps = ["待處理", "配送中", "已完成"]
+                _step_idx = next((i for i, s in enumerate(_steps) if s == status), -1)
+                if status == "已拒絕":
+                    st.markdown(
+                        '<div style="background:#f5f5f5;border-radius:8px;padding:6px 12px;'
+                        'color:#9E9E9E;font-size:0.8rem;text-align:center">❌ 此申請已拒絕</div>',
+                        unsafe_allow_html=True,
+                    )
+                elif _step_idx >= 0:
+                    _step_html = ""
+                    for _si, _sname in enumerate(_steps):
+                        _done  = _si < _step_idx
+                        _curr  = _si == _step_idx
+                        _bg    = "#43A047" if _done else ("#1976D2" if _curr else "#E0E0E0")
+                        _tc    = "white" if (_done or _curr) else "#9E9E9E"
+                        _fw    = "700" if _curr else "400"
+                        _step_html += (
+                            f'<div style="flex:1;text-align:center">'
+                            f'<div style="width:28px;height:28px;border-radius:50%;background:{_bg};'
+                            f'color:white;font-size:0.75rem;font-weight:700;line-height:28px;'
+                            f'margin:0 auto">{"✓" if _done else _si+1}</div>'
+                            f'<div style="font-size:0.72rem;color:{_tc};font-weight:{_fw};margin-top:3px">{_sname}</div>'
+                            f'</div>'
+                        )
+                        if _si < len(_steps) - 1:
+                            _lc = "#43A047" if _done else "#E0E0E0"
+                            _step_html += f'<div style="flex:0.3;height:2px;background:{_lc};margin-top:14px"></div>'
+                    st.markdown(
+                        f'<div style="display:flex;align-items:flex-start;padding:8px 4px 4px">{_step_html}</div>',
+                        unsafe_allow_html=True,
+                    )
+
                 # ── 基本資訊 ──────────────────────────────────────────────────
                 d1, d2 = st.columns(2)
                 with d1:
@@ -2182,9 +2219,24 @@ elif st.session_state.stage == "chat":
         else:
             username = st.session_state.username
             _model_name = "GPT-4o" if using_gpt else OLLAMA_MODEL
+            # 情境感知：取得當前時間與天氣
+            try:
+                from mcp_server import get_current_time, get_weather
+                import json as _j
+                _time_info = _j.loads(get_current_time())
+                _hour = int(_time_info.get("hour", 12))
+                _greeting = "早安" if _hour < 11 else ("午安" if _hour < 14 else ("午後好" if _hour < 17 else ("晚安" if _hour >= 21 else "晚上好")))
+                _weather_raw = _j.loads(get_weather(city="台北"))
+                _wdesc = _weather_raw.get("description", "")
+                _temp  = _weather_raw.get("temperature_c", "")
+                _ctx = f"目前台北 {_temp}°C、{_wdesc}。" if _temp else ""
+            except Exception:
+                _greeting = "您好"
+                _ctx = ""
             text = (
-                f"嗨 {username}！我是您的 統一生活管家 🏪\n\n"
-                f"由 **{_model_name}** 透過 **MCP 協議**真實呼叫工具，"
+                f"{_greeting}，{username}！我是您的 統一生活管家 🏪\n\n"
+                + (f"{_ctx}\n\n" if _ctx else "")
+                + f"由 **{_model_name}** 透過 **MCP 協議**真實呼叫工具，"
                 f"幫您在 7-11、萬家福、康是美、統一生機、Mister Donut、Cold Stone、21plus、統一星巴克、聖德科斯 採買！\n\n"
                 f"請告訴我您的需求，例如：\n"
                 f"- 「我想增肌，預算 500 元」\n"
