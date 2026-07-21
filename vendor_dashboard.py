@@ -13,7 +13,7 @@ _null = contextlib.nullcontext()
 from vendor_helpers import (
     DB, VENDOR_COLOR, CAT_ICON, STATUS_CFG, DELIVERY_TYPE_CFG,
     DELIVERY_COMPANIES, DELIVERY_ICON, MCP_TOOLS,
-    _db, get_stats, get_products, update_stock, insert_product, delete_product,
+    _db, get_stats, get_chart_data, get_products, update_stock, insert_product, delete_product,
     get_inquiries, reject_inquiry, reserve_inquiry,
     get_brand_stores, get_dispatches, get_active_deliveries, update_delivery_status,
     update_product,
@@ -91,7 +91,9 @@ if _col_out.button("登出", key="v_logout"):
     for _k in ["vendor_id", "vendor_store", "vendor_brand"]:
         st.session_state[_k] = None
     st.rerun()
-st.caption("統一集團 × MCP Server ✦ 商品庫存 · 採買諮詢 · 外送派送 ｜ 後台 AI + mcp.Client")
+_hcap, _hauto = st.columns([5, 1])
+_hcap.caption("統一集團 × MCP Server ✦ 商品庫存 · 採買諮詢 · 外送派送 ｜ 後台 AI + mcp.Client")
+_auto_refresh = _hauto.toggle("🔄 自動刷新", value=st.session_state.get("auto_refresh", False), key="auto_refresh")
 
 # ── 品牌判斷（頁籤與統計共用） ────────────────────────────────────────────────
 
@@ -107,6 +109,16 @@ _is_finance     = _brand_v == "金融"
 
 _stat_vendor = "" if _is_admin_v else (_brand_v if _brand_v not in ("全部", "外送員", "健身房", "保險", "金融") else "")
 total, out_of_stock, low_stock_count, avg_protein, pending, delivering = get_stats(_stat_vendor)
+
+# ── 新單通知 ──────────────────────────────────────────────────────────────────
+if "last_known_pending" not in st.session_state:
+    st.session_state.last_known_pending = pending
+elif pending > st.session_state.last_known_pending:
+    _diff = pending - st.session_state.last_known_pending
+    st.toast(f"🔔 有 {_diff} 筆新諮詢單進來！", icon="🔔")
+    st.session_state.last_known_pending = pending
+else:
+    st.session_state.last_known_pending = pending
 if _is_driver:
     m1, m2 = st.columns(2)
     m1.metric("⏳ 待取件",  pending)
@@ -131,6 +143,25 @@ else:
     m3.metric("❌ 售完",        out_of_stock)
     m4.metric("⏳ 待處理諮詢",  pending)
     m5.metric("🚚 配送中",      delivering)
+
+# ── 管理員圖表 ────────────────────────────────────────────────────────────────
+if _is_admin_v:
+    with st.expander("📊 數據總覽", expanded=True):
+        _stock_data, _status_data, _enroll_data, _brand_orders = get_chart_data()
+        _gc1, _gc2, _gc3 = st.columns(3)
+        with _gc1:
+            st.markdown("**各品牌庫存量**")
+            if _stock_data:
+                import pandas as pd
+                st.bar_chart(pd.DataFrame.from_dict(_stock_data, orient="index", columns=["庫存"]), color="#00833D")
+        with _gc2:
+            st.markdown("**諮詢單狀態分佈**")
+            if _status_data:
+                st.bar_chart(pd.DataFrame.from_dict(_status_data, orient="index", columns=["件數"]), color="#1976D2")
+        with _gc3:
+            st.markdown("**課程報名人數**")
+            if _enroll_data:
+                st.bar_chart(pd.DataFrame.from_dict(_enroll_data, orient="index", columns=["人數"]), color="#7B5EA7")
 
 st.divider()
 
@@ -237,17 +268,19 @@ if tab1 is not None:
         _all_cats = ["全部", "蛋白質", "主食", "蔬果", "乳製品", "保健品", "即食",
                      "甜食", "甜點", "飲料", "咖啡", "酒類", "有機食品"]
         if _is_admin:
-            fc1, fc2, fc3, fc4 = st.columns([2, 2, 1, 1])
+            fc1, fc2, fc3, fc4, fc5 = st.columns([2, 2, 2, 1, 1])
             sel_vendor = fc1.selectbox("通路", ["全部"] + _RETAIL_BRANDS, key="v_vendor", label_visibility="collapsed")
             sel_cat    = fc2.selectbox("分類", _all_cats, key="v_cat", label_visibility="collapsed")
-            show_low   = fc3.checkbox("僅低庫存", key="v_low")
-            _add_col   = fc4
+            search_kw  = fc3.text_input("搜尋商品名稱", key="v_search", placeholder="🔍 輸入關鍵字...", label_visibility="collapsed")
+            show_low   = fc4.checkbox("僅低庫存", key="v_low")
+            _add_col   = fc5
         else:
             sel_vendor = _brand
-            fc1, fc2, fc3 = st.columns([2, 1, 1])
-            sel_cat  = fc1.selectbox("分類", _all_cats, key="v_cat", label_visibility="collapsed")
-            show_low = fc2.checkbox("僅低庫存", key="v_low")
-            _add_col = fc3
+            fc1, fc2, fc3, fc4 = st.columns([2, 2, 1, 1])
+            sel_cat   = fc1.selectbox("分類", _all_cats, key="v_cat", label_visibility="collapsed")
+            search_kw = fc2.text_input("搜尋商品名稱", key="v_search", placeholder="🔍 輸入關鍵字...", label_visibility="collapsed")
+            show_low  = fc3.checkbox("僅低庫存", key="v_low")
+            _add_col  = fc4
 
         if _add_col.button("➕ 新增", key="btn_add_product", use_container_width=True, type="primary"):
             _dialog_add_product(_brand, _is_admin)
@@ -256,6 +289,7 @@ if tab1 is not None:
             vendor=None if sel_vendor == "全部" else sel_vendor,
             category=None if sel_cat == "全部" else sel_cat,
             low_stock_only=show_low,
+            search=search_kw.strip() or None,
         )
         st.caption(f"顯示 {len(products)} 筆商品")
         st.divider()
@@ -1705,3 +1739,9 @@ if tab6 is not None:
                             if cc2.button("不取消", key=f"abort_cancel_{cid}"):
                                 st.session_state[f"cancel_confirm_{cid}"] = False
                                 st.rerun()
+
+# ── 自動刷新（放腳本最末，頁面渲染完後等待再 rerun）────────────────────────────
+if st.session_state.get("auto_refresh"):
+    import time as _time
+    _time.sleep(15)
+    st.rerun()
