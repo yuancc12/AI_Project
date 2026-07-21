@@ -1,123 +1,123 @@
 # AI 生活管家 — CLAUDE.md
 
-## 专案概述
+## 專案概述
 
-**2026 雲湧智生黑客松**（統一資訊命題）参赛作品。
-这是一个「7-ELEVEN 生活管家」系统，让消费者用自然语言描述生活需求（漏水、清洁、订位），
-系统自动判断服务类型、显示动态表单、送出后媒合附近厂商。
+**2026 雲湧智生黑客松**（統一資訊命題）參賽作品。
+「7-ELEVEN 生活管家」—— 讓消費者用自然語言處理一切生活需求，
+系統由 AI 呼叫 MCP 工具完成採買、旅遊規劃、保險申請、健身課程、外送派件等服務。
 
-## 档案结构
+## 檔案結構
 
-| 档案 | 职责 |
+| 檔案 | 職責 |
 |------|------|
-| `seed.py` | 建立 SQLite 资料库 `butler.db`，塞入分类/表单/厂商/区域假资料 |
-| `mcp_server.py` | MCP Server，含三个可直接 import 的 Python 函式 |
-| `app.py` | Streamlit 消费者前端，直接 import mcp_server 的函式 |
-| `butler.db` | SQLite 资料库（若不存在，app.py 会自动执行 seed.py 建立） |
-| `requirements.txt` | 只有 `mcp[cli]>=1.2.0`；前端另需 `streamlit` |
+| `seed.py` | 建立 SQLite 資料庫 `butler.db`（含縣市/行政區/商品/廠商/課程假資料） |
+| `mcp_server.py` | 19 個 MCP 工具函式（可直接 import，也可作為 stdio MCP Server 啟動） |
+| `app.py` | Streamlit 消費者前端（AI 對話 + 諮詢單表單 + 保險簽名 + 地圖） |
+| `app_helpers.py` | SYSTEM_PROMPT、CLAUDE_TOOLS 清單、TOOL_FNS 對應、工具 Schema |
+| `vendor_dashboard.py` | 後台管理（商品庫存、諮詢單接單、課程管理、保險生效確認） |
+| `vendor_helpers.py` | 後台 DB 操作、廠商帳號管理（vendor_users）、Email 輔助 |
+| `butler.db` | SQLite 資料庫（seed.py 執行後產生，conversation/vendor_users 由 app 啟動時自建） |
+| `.env` | API 金鑰（SMTP、Spoonacular、TDX、Edamam） |
+| `requirements.txt` | 全部依賴（含 streamlit-drawable-canvas、folium 等） |
 
-## 启动方式
+## 啟動方式
 
 ```bash
-pip install -r requirements.txt
-pip install streamlit
+# 安裝依賴
+uv pip install -r requirements.txt
 
-# 建资料库（app.py 也会自动做）
+# 建資料庫
 python seed.py
 
-# 跑前端
+# 消費者前端（http://localhost:8501）
 streamlit run app.py
 
-# 测试三个函式逻辑（不启动 server）
+# 後台管理（http://localhost:8502）
+streamlit run vendor_dashboard.py --server.port 8502
+
+# 測試 MCP 工具
 python mcp_server.py --selftest
 ```
 
-## 核心三个函式（mcp_server.py）
+> **注意**：每次執行 `seed.py` 後，需重啟 app（或執行
+> `python -c "from app_helpers import _ensure_conversation_table, _ensure_users_schema; _ensure_conversation_table(); _ensure_users_schema()"`）
+> 以重建 `conversation` 和 `vendor_users` 表。
 
-### `get_service_form(user_request: str) -> str`
-- 输入：自然语言需求描述
-- 逻辑：关键字比对 `service_category.keywords` → 找对应的 `pms_form` + 题目
-- 回传 JSON：
-  ```json
-  {
-    "matched": true,
-    "form_id": 1,
-    "form_name": "水電修繕估價單",
-    "category_id": 1,
-    "category": "水電修繕",
-    "intro": "...",
-    "topics": [
-      {
-        "topic_id": 101,
-        "title": "問題描述",
-        "type": "詳答",
-        "required": true,
-        "remark": "...",
-        "options": []
-      }
-    ]
-  }
-  ```
-- 未比对到时：`{"matched": false, "message": "..."}`
+## MCP 工具清單（mcp_server.py，共 19 個）
 
-### `submit_form_feedback(form_id, category_id, contact_name, contact_mobile, county_code, district_code, description, answers="{}") -> str`
-- 写入 `pms_form_feedback` 表，产生 `feedback_no`（格式：`FB260706XXXXXX`）
-- 回传 JSON：`{"success": true, "feedback_no": "FB...", "message": "..."}`
+| # | 工具名稱 | 功能 |
+|---|---------|------|
+| 1 | `search_grocery` | 關鍵字搜尋統一集團商品庫（7-11/萬家福/康是美/統一生機等） |
+| 2 | `recommend_high_protein` | 依目標（增肌/減脂）與預算推薦高蛋白商品 |
+| 3 | `check_inventory` | 查詢商品庫存 |
+| 4 | `submit_inquiry` | 建立諮詢單（採買/搬家/旅遊/保險等任何服務） |
+| 5 | `dispatch_delivery` | 後台派送外送，建立 mms_order_record |
+| 6 | `get_partner_vendors` | 查詢合作廠商（健身房/搬家/清潔/快遞/保險/金融） |
+| 7 | `get_current_time` | 取得台灣當前時間 |
+| 8 | `get_weather` | 即時天氣（Open-Meteo，免費無金鑰） |
+| 9 | `search_recipe` | 搜尋食譜（Spoonacular API） |
+| 10 | `analyze_meal_nutrition` | 分析餐食營養 |
+| 11 | `recommend_after_meal` | 餐後補充品推薦 |
+| 12 | `calculate_tdee` | 個人化 TDEE 計算 |
+| 13 | `get_gym_courses` | 查詢 Being Sport 本月健身課程 |
+| 14 | `enroll_gym_course` | 報名健身課程（支援多課程一張諮詢單） |
+| 15 | `find_nearby_stores` | 附近地點搜尋（7-ELEVEN 用 pcsc.com.tw 官方 API，其他用 OSM） |
+| 16 | `find_route` | 路線規劃（Nominatim + 最近鄰演算法） |
+| 17 | `find_sports_venues` | 公共運動場館查詢（教育部體育署 iPlay） |
+| 18 | `send_email_notification` | SMTP Email 通知 |
+| 19 | `find_tourist_attractions` | 觀光景點/餐廳/住宿/活動（交通部 TDX API） |
 
-### `match_vendors(category_id, county_code, district_code="") -> str`
-- 依分类 + 地区查 `service_vendor` JOIN `vendor_service_area`，按 `rating DESC`
-- 若指定区域无结果，自动放宽到同县市
-- 回传 JSON：`{"count": N, "vendors": [{"vendor_id":1, "name":"...", "rating":4.8, "phone":"..."}]}`
-
-## 题型代码对照（pms_form_topic.type）
-
-| 代码 | 类型 | Streamlit 元件 |
-|------|------|----------------|
-| 1 | 簡答 | `st.text_input` |
-| 2 | 詳答 | `st.text_area` |
-| 3 | 單選 | `st.radio` |
-| 4 | 複選 | `st.multiselect` |
-| 5 | 地區選單 | 县市 + 行政区 `st.selectbox`（联动） |
-| 6 | 上傳照片 | `st.file_uploader` |
-| 7 | 備註 | `st.text_area` |
-| 8 | 聯絡資料 | 姓名 + 电话 + 县市 + 行政区 |
-| 9 | 日期 | `st.date_input` |
-| 10 | 聯絡資料(不含地址) | 姓名 + 电话 |
-
-## 资料库重要表格
+## 資料庫重要表格
 
 ```
-service_category   — 服务分类（id, name, keywords, description）
-pms_form           — 表单主档（id, category_id, name, intro_content, is_enable）
-pms_form_topic     — 题目（id, form_id, type, title, remark, is_required, sort）
-pms_topic_option   — 选项（id, topic_id, option_name, unit_price, unit, sort）
-service_vendor     — 厂商（id, name, category_id, rating, phone）
-vendor_service_area— 厂商服务范围（vendor_id, county_code, district_code）
-sys_county         — 县市（code, name）  台北市=01 新北市=02 桃园市=03 台中市=04 高雄市=05
-sys_district       — 行政区（code, county_code, name, zip）
-pms_form_feedback  — 诊询单（feedback_no, form_id, category_id, contact_name, ...）
+fitness_product          — 統一集團商品（name, vendor, protein_g, calories, price, stock）
+cms_homepage_service_vendor — 服務通路（7-ELEVEN/萬家福/康是美/統一生機/Mister Donut/Cold Stone/21plus/統一星巴克/聖德科斯）
+partner_vendor           — 合作廠商（Being Sport健身房/統一速達/統超保險/統一證券/清潔等）
+pms_form_feedback        — 諮詢單（feedback_no 格式: FB260706XXXXXX，status: 待處理/配送中/預留中/已完成/已拒絕）
+mms_order_record         — 外送派件單（order_no 格式: ORD260706XXXXXX）
+sys_county               — 縣市（22個，code 01~22）
+sys_district             — 行政區（360個，含全台22縣市完整行政區）
+users                    — 消費者帳號（含 email, county_code, district_code, address）
+vendor_users             — 廠商/後台帳號
+conversation             — AI 對話歷史
+gym_course / course_enrollment — 健身課程與報名記錄
 ```
 
-## 意图判断逻辑（`_classify`）
+## 後台帳號（vendor_users）
 
-目前是**关键字比对**，不接 LLM：
-- 统计 `service_category.keywords`（逗号分隔）在用户输入中出现几个
-- 取命中数最多的分类
-- 正式版可替换成 LLM / Amazon Bedrock，函式介面不变
+| 帳號 | 密碼 | 身份 |
+|------|------|------|
+| `7-11-A` | `vendor123` | 7-11 門市 A |
+| `wanjiafu` | `vendor123` | 萬家福信義店 |
+| `cosmed` | `vendor123` | 康是美中山店 |
+| `beingsport` | `gym123` | Being Sport 健身中心 |
+| `insurance` | `ins123` | **統超保險經紀人**（只看保險申請單） |
+| `unisec` | `sec123` | 統一證券 |
+| `driver1/2` | `driver123` | 外送員 |
+| `admin` | `admin123` | 管理員（看全部） |
 
-## app.py 架构（Streamlit）
+## 旅遊保險申請流程
 
-三阶段状态机，用 `st.session_state.stage` 控制：
-1. `input` — 文字输入框，分析需求
-2. `form` — 动态渲染题目，联动县市/行政区下拉
-3. `result` — 显示 feedback_no + 厂商列表
+1. 用戶問旅遊 → AI 呼叫 `find_tourist_attractions` 搜尋景點
+2. 展示後 AI 主動問：「需要投保旅遊險嗎？」
+3. 用戶同意 → AI 收集目的地/日期/人數 → 呼叫 `submit_inquiry(goal="旅遊保險申請")`
+4. 前端跳出 **🛡️ 旅遊保險申請表**（無電話欄位，有手寫電子簽名）
+5. 用戶簽名送出 → 後台 `insurance` 帳號可見
+6. 後台點「✅ 確認生效」→ 狀態改已完成 + 自動發 Email
 
-县市/行政区联动关键：district selectbox 的 key 包含所选县市名称（`q_{tid}_dist_{sel_county}`），
-县市变动时 key 改变，Streamlit 自动重置为新县市的第一个行政区。
+## .env 金鑰說明
 
-## 开发注意事项
+```
+SPOONACULAR_API_KEY=   # 食譜 API
+SMTP_HOST/PORT/USER/PASS=  # Gmail SMTP（發送 Email 通知）
+TDX_CLIENT_ID=         # 交通部 TDX 觀光 API（https://tdx.transportdata.tw 申請）
+TDX_CLIENT_SECRET=
+```
 
-- 不需要重写 DB 逻辑，直接 `from mcp_server import` 三个函式
-- `butler.db` 不存在时 app.py 开头会自动 `import seed; seed.main()`
-- MCP Server 本身是 stdio transport，`mcp.run()` 才会启动；直接 import 呼叫函式不会启动 server
-- `@mcp.tool()` 装饰器不影响函式的直接调用（selftest 已验证）
+## 開發注意事項
+
+- `seed.py` 會 DROP 所有表重建，`conversation`/`vendor_users` 需 app 啟動後才自建
+- MCP Server 本身是 stdio transport；直接 import 函式不會啟動 server，`@mcp.tool()` 不影響直接呼叫
+- 7-ELEVEN 門市查詢優先用 `pcsc.com.tw` 官方 API（XML 格式，座標為 X/Y 整數需除以 1,000,000），pcsc 回 0 時自動只帶 city 重查
+- TDX 觀光 API 需要 Bearer token（填入 .env 後自動快取 24hr）；未填金鑰回傳明確提示
+- 競品品牌（全家/萊爾富/全聯等）AI 不得推薦，工具回傳有競品時直接過濾

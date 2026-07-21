@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-mcp_server.py — 7-ELEVEN 生活管家 MCP Server
+mcp_server.py — 統一生活管家 MCP Server
 
 把統一集團各類服務包裝成 MCP 工具，讓 Claude / 任何 MCP Agent 調用。
 

@@ -7,3 +7,5 @@ requests>=2.31.0
 streamlit-js-eval>=0.1.6
 folium>=0.14.0
 streamlit-folium>=0.17.0
+streamlit-drawable-canvas>=0.9.3
+pillow>=10.0.0

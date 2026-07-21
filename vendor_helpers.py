@@ -21,14 +21,21 @@ if not os.path.exists(DB):
 from mcp_server import mcp as _mcp, _send_email  # MCP Server instance + email 輔助
 
 VENDOR_COLOR = {
-    "7-11":    "#00833D",
-    "萬家福":  "#0064D2",
-    "康是美":  "#E60012",
-    "統一生機": "#7B5EA7",
+    "7-11":         "#00833D",
+    "萬家福":       "#0064D2",
+    "康是美":       "#E60012",
+    "統一生機":     "#7B5EA7",
+    "Mister Donut": "#E31837",
+    "Cold Stone":   "#1E88E5",
+    "21plus":       "#37474F",
+    "統一星巴克":   "#00704A",
+    "聖德科斯":     "#558B2F",
 }
 CAT_ICON = {
     "蛋白質": "🥩", "主食": "🍚", "蔬果": "🥦",
     "乳製品": "🥛", "保健品": "💊", "即食": "🍱",
+    "甜食": "🍩", "甜點": "🍦", "飲料": "🧃",
+    "咖啡": "☕", "酒類": "🍺", "有機食品": "🌿",
 }
 STATUS_CFG = {
     "待處理":   {"color": "#FF9800", "icon": "⏳"},
@@ -176,6 +183,17 @@ MCP_TOOLS = [
         "type": "🔴 寫入", "caller": "後台 AI 助手 / dispatch_delivery 自動觸發",
         "desc": "透過 SMTP 發送 Email 通知給指定收件人。dispatch_delivery 接單成功後自動查詢用戶 Email 並發送接單通知；後台 AI 助手也可主動呼叫發送任意通知信。需在 .env 設定 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS。",
         "trigger": "①接單後自動觸發（dispatch_delivery 內部呼叫）；②後台人員指示 AI 助手「發信通知用戶」時呼叫。",
+    },
+    {
+        "no": 19, "name": "find_tourist_attractions",
+        "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
+        "desc": (
+            "透過交通部 TDX API 查詢全台觀光景點、餐廳、住宿與活動資訊。"
+            "支援關鍵字搜尋（如「阿里山」「夜市」）與縣市篩選，回傳名稱、地址、評分、電話及開放時間。"
+            "需在 .env 設定 TDX_CLIENT_ID / TDX_CLIENT_SECRET；未設定時回傳明確提示。"
+        ),
+        "trigger": "用戶詢問旅遊景點、餐廳推薦、住宿、週末去哪玩、台灣景點等問題時呼叫。"
+                   "展示景點後 AI 應主動詢問是否需要投保旅遊保險。",
     },
 ]
 
@@ -452,6 +470,22 @@ def get_products(vendor=None, category=None, low_stock_only=False):
     return [dict(r) for r in rows]
 
 
+def insert_product(name, vendor, category, protein_g, calories, price, stock):
+    con = _db()
+    con.execute(
+        "INSERT INTO fitness_product (name, vendor, category, protein_g, calories, price, stock) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (name, vendor, category, float(protein_g), int(calories), int(price), int(stock)),
+    )
+    con.commit()
+    con.close()
+
+def delete_product(product_id):
+    con = _db()
+    con.execute("DELETE FROM fitness_product WHERE id=?", (product_id,))
+    con.commit()
+    con.close()
+
 def update_stock(product_id, new_stock):
     con = _db()
     con.execute("UPDATE fitness_product SET stock=? WHERE id=?", (new_stock, product_id))
@@ -480,13 +514,18 @@ def get_inquiries(status_filter=None, store_name=None, brand=None, is_gym=False,
     elif is_finance:
         conditions.append("(goal LIKE '%理財%' OR goal LIKE '%投資%' OR goal LIKE '%股票%' OR goal LIKE '%基金%' OR goal LIKE '%證券%')")
     elif store_name and store_name != "管理員":
+        # 排除保險/理財/課程類諮詢單（這些只有專屬帳號才看得到）
+        conditions.append(
+            "goal NOT LIKE '%保險%' AND goal NOT LIKE '%旅遊險%' AND goal NOT LIKE '%投保%' "
+            "AND goal NOT LIKE '%理財%' AND goal NOT LIKE '%投資%' AND goal NOT LIKE '%股票%' "
+            "AND goal NOT LIKE '%基金%' AND goal NOT LIKE '%證券%' "
+            "AND goal NOT LIKE '課程報名：%'"
+        )
         if brand and brand not in ("全部", "健身房"):
-            # 顯示：已派給本門市 OR (待處理 AND (含本品牌商品 OR 商品無vendor欄位 OR 清單為空))
+            # 顯示：已派給本門市 OR (待處理 AND 商品清單含有本品牌商品)
             conditions.append(
                 "(vendor_reply LIKE ? OR "
-                "(status='待處理' AND (products_json LIKE ? "
-                "OR products_json NOT LIKE '%\"vendor\":%' "
-                "OR products_json IS NULL OR products_json='' OR products_json='[]')))"
+                "(status='待處理' AND products_json LIKE ?))"
             )
             params.append(f"%{store_name}%")
             params.append(f'%"vendor": "{brand}"%')
@@ -809,16 +848,21 @@ def _ensure_vendor_users():
 
     # (username, password, store_name, brand, address)
     for row in [
-        ("7-11-A",     "vendor123", "7-11 A門市",          "7-11",   "台北市信義區松仁路28號"),
-        ("7-11-B",     "vendor123", "7-11 B門市",          "7-11",   "台北市信義區基隆路一段200號"),
-        ("wanjiafu",   "vendor123", "萬家福信義店",          "萬家福", "台北市信義區忠孝東路五段68號"),
-        ("cosmed",     "vendor123", "康是美中山店",          "康是美", "台北市中山區南京東路二段100號"),
-        ("beingsport",  "gym123",    "Being Sport 健身中心",   "健身房", "台北市信義區松高路11號"),
-        ("insurance",   "ins123",    "統超保險經紀人",         "保險",   "台北市大安區光復南路280號"),
-        ("unisec",      "sec123",    "統一證券",               "金融",   "台北市信義區莊敬路388號"),
-        ("driver1",     "driver123", "外送員 小明",            "外送員", ""),
-        ("driver2",     "driver123", "外送員 小華",            "外送員", ""),
-        ("admin",       "admin123",  "管理員",                 "全部",   ""),
+        ("7-11-A",      "vendor123", "7-11 A門市",              "7-11",         "台北市信義區松仁路28號"),
+        ("7-11-B",      "vendor123", "7-11 B門市",              "7-11",         "台北市信義區基隆路一段200號"),
+        ("wanjiafu",    "vendor123", "萬家福信義店",              "萬家福",       "台北市信義區忠孝東路五段68號"),
+        ("cosmed",      "vendor123", "康是美中山店",              "康是美",       "台北市中山區南京東路二段100號"),
+        ("misterdonut", "vendor123", "Mister Donut 大安店",      "Mister Donut", "台北市大安區忠孝東路四段181號1F"),
+        ("coldstone",   "vendor123", "Cold Stone 信義店",        "Cold Stone",   "台北市信義區松壽路11號1F"),
+        ("21plus",      "vendor123", "21plus 信義旗艦店",        "21plus",       "台北市信義區菸廠路88號"),
+        ("starbucks",   "vendor123", "統一星巴克 信義店",        "統一星巴克",   "台北市信義區松壽路1號1F"),
+        ("sanitas",     "vendor123", "聖德科斯 中山店",          "聖德科斯",     "台北市中山區南京東路二段30號"),
+        ("beingsport",  "gym123",    "Being Sport 健身中心",     "健身房",       "台北市信義區松高路11號"),
+        ("insurance",   "ins123",    "統超保險經紀人",           "保險",         "台北市大安區光復南路280號"),
+        ("unisec",      "sec123",    "統一證券",                 "金融",         "台北市信義區莊敬路388號"),
+        ("driver1",     "driver123", "外送員 小明",              "外送員",       ""),
+        ("driver2",     "driver123", "外送員 小華",              "外送員",       ""),
+        ("admin",       "admin123",  "管理員",                   "全部",         ""),
     ]:
         con.execute(
             "INSERT OR IGNORE INTO vendor_users "

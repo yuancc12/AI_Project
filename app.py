@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""7-ELEVEN 生活管家 — 登入 + Claude API + 真實 MCP 工具呼叫"""
+"""統一生活管家 — 登入 + Claude API + 真實 MCP 工具呼叫"""
 import os
 import json
 import asyncio
@@ -952,7 +952,7 @@ def render_tool_results(tool_calls: list):
 # Page config & session init
 # ═════════════════════════════════════════════════════════════════════════════
 
-st.set_page_config(page_title="健康生活助手", page_icon="🌿", layout="wide")
+st.set_page_config(page_title="統一生活管家", page_icon="🏪", layout="wide")
 
 # ── PWA meta tags + manifest（讓手機可「加入主畫面」成為 app）────────────────
 st.markdown("""
@@ -981,7 +981,7 @@ st.markdown("""
     var mt = document.querySelector('meta[name="apple-mobile-web-app-title"]');
     if (!mt) {
         mt = document.createElement('meta');
-        mt.name = 'apple-mobile-web-app-title'; mt.content = '生活管家';
+        mt.name = 'apple-mobile-web-app-title'; mt.content = '統一生活管家';
         document.head.appendChild(mt);
     }
 })();
@@ -1271,8 +1271,8 @@ with st.sidebar:
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 
-st.markdown("## 🌿 健康生活助手")
-st.caption("統一集團 × AI 助手 ✦ 7-11・萬家福・康是美・統一生機")
+st.markdown("## 🏪 統一生活管家")
+st.caption("統一集團 × AI 助手 ✦ 7-11・萬家福・康是美・統一生機・Mister Donut・Cold Stone・21plus・統一星巴克・聖德科斯")
 st.divider()
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1282,7 +1282,7 @@ st.divider()
 if st.session_state.stage == "login":
     _, center, _ = st.columns([1, 2, 1])
     with center:
-        st.markdown("### 👤 歡迎使用健康生活助手")
+        st.markdown("### 👤 歡迎使用 統一生活管家")
         st.markdown("登入後即可開始與 AI 對話採買 💪")
         st.markdown("")
         tab_login, tab_reg = st.tabs(["登入", "📝 新用戶註冊"])
@@ -2183,9 +2183,9 @@ elif st.session_state.stage == "chat":
             username = st.session_state.username
             _model_name = "GPT-4o" if using_gpt else OLLAMA_MODEL
             text = (
-                f"嗨 {username}！我是您的健康生活助手 💪\n\n"
+                f"嗨 {username}！我是您的 統一生活管家 🏪\n\n"
                 f"由 **{_model_name}** 透過 **MCP 協議**真實呼叫工具，"
-                f"幫您在 7-11、萬家福、康是美、統一生機 採買！\n\n"
+                f"幫您在 7-11、萬家福、康是美、統一生機、Mister Donut、Cold Stone、21plus、統一星巴克、聖德科斯 採買！\n\n"
                 f"請告訴我您的需求，例如：\n"
                 f"- 「我想增肌，預算 500 元」\n"
                 f"- 「有沒有雞胸肉」\n"
