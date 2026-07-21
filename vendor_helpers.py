@@ -31,11 +31,13 @@ CAT_ICON = {
     "乳製品": "🥛", "保健品": "💊", "即食": "🍱",
 }
 STATUS_CFG = {
-    "待處理": {"color": "#FF9800", "icon": "⏳"},
-    "預留中": {"color": "#7B5EA7", "icon": "📦"},
-    "配送中": {"color": "#1976D2", "icon": "🚚"},
-    "已拒絕": {"color": "#9E9E9E", "icon": "❌"},
-    "已完成": {"color": "#43A047", "icon": "✅"},
+    "待處理":   {"color": "#FF9800", "icon": "⏳"},
+    "待簽名":   {"color": "#9C27B0", "icon": "✍️"},
+    "待後台確認": {"color": "#2196F3", "icon": "🔍"},
+    "預留中":   {"color": "#7B5EA7", "icon": "📦"},
+    "配送中":   {"color": "#1976D2", "icon": "🚚"},
+    "已拒絕":   {"color": "#9E9E9E", "icon": "❌"},
+    "已完成":   {"color": "#43A047", "icon": "✅"},
 }
 DELIVERY_TYPE_CFG = {
     "外送": {"color": "#1976D2", "icon": "🚚", "label": "外送"},
@@ -477,7 +479,7 @@ def update_product(product_id, name, category, protein_g, calories, price, stock
     con.close()
 
 
-def get_inquiries(status_filter=None, store_name=None, brand=None, is_gym=False):
+def get_inquiries(status_filter=None, store_name=None, brand=None, is_gym=False, is_insurance=False):
     con = _db()
     conditions, params = [], []
     if status_filter and status_filter != "全部":
@@ -485,6 +487,8 @@ def get_inquiries(status_filter=None, store_name=None, brand=None, is_gym=False)
         params.append(status_filter)
     if is_gym:
         conditions.append("goal LIKE '課程報名：%'")
+    elif is_insurance:
+        conditions.append("(goal LIKE '%保險%' OR goal LIKE '%旅遊險%' OR goal LIKE '%投保%')")
     elif store_name and store_name != "管理員":
         if brand and brand not in ("全部", "健身房"):
             # 顯示：已派給本門市 OR (待處理 AND (含本品牌商品 OR 商品無vendor欄位 OR 清單為空))
@@ -819,10 +823,12 @@ def _ensure_vendor_users():
         ("7-11-B",     "vendor123", "7-11 B門市",          "7-11",   "台北市信義區基隆路一段200號"),
         ("wanjiafu",   "vendor123", "萬家福信義店",          "萬家福", "台北市信義區忠孝東路五段68號"),
         ("cosmed",     "vendor123", "康是美中山店",          "康是美", "台北市中山區南京東路二段100號"),
-        ("beingsport", "gym123",   "Being Sport 健身中心", "健身房", "台北市信義區松高路11號"),
-        ("driver1",    "driver123", "外送員 小明",          "外送員", ""),
-        ("driver2",    "driver123", "外送員 小華",          "外送員", ""),
-        ("admin",      "admin123", "管理員",               "全部",   ""),
+        ("beingsport",  "gym123",    "Being Sport 健身中心",   "健身房", "台北市信義區松高路11號"),
+        ("insurance",   "ins123",    "統超保險經紀人",         "保險",   "台北市大安區光復南路280號"),
+        ("unisec",      "sec123",    "統一證券",               "金融",   "台北市信義區莊敬路388號"),
+        ("driver1",     "driver123", "外送員 小明",            "外送員", ""),
+        ("driver2",     "driver123", "外送員 小華",            "外送員", ""),
+        ("admin",       "admin123",  "管理員",                 "全部",   ""),
     ]:
         con.execute(
             "INSERT OR IGNORE INTO vendor_users "

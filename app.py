@@ -91,11 +91,14 @@ def _reverse_geocode(lat: float, lng: float) -> str:
         )
         if r.ok:
             a = r.json().get("address", {})
+            hn = a.get("house_number", "")
+            if hn and not hn.endswith("號"):
+                hn += "號"
             parts = [
                 a.get("city") or a.get("county") or a.get("state"),
                 a.get("city_district") or a.get("suburb") or a.get("town"),
                 a.get("road") or a.get("pedestrian"),
-                a.get("house_number"),
+                hn or None,
             ]
             return "".join(p for p in parts if p)
     except Exception:
@@ -1000,6 +1003,7 @@ for k, v in {
     "conversation_id":    None,
     "last_products":      [],
     "_pending_delete_id": None,
+    "insurance_sign_no": "",
     "user_lat":           None,
     "user_lng":           None,
     # 用戶體能資料
@@ -1051,12 +1055,31 @@ with st.sidebar:
         _quick_orders = get_my_inquiries(st.session_state.user_id)[:3]
         if _quick_orders:
             _ORDER_BADGE = {
-                "待處理": ("#FF9800", "⏳"),
-                "配送中": ("#1976D2", "🚚"),
-                "已完成": ("#43A047", "✅"),
-                "已拒絕": ("#E53935", "❌"),
-                "預留中": ("#9C27B0", "📦"),
+                "待處理":   ("#FF9800", "⏳"),
+                "待簽名":   ("#9C27B0", "✍️"),
+                "待後台確認": ("#2196F3", "🔍"),
+                "配送中":   ("#1976D2", "🚚"),
+                "已完成":   ("#43A047", "✅"),
+                "已拒絕":   ("#E53935", "❌"),
+                "預留中":   ("#7B5EA7", "📦"),
             }
+            # ── 保險待簽名提醒 ──────────────────────────────────────────
+            _pending_sign = [o for o in _quick_orders if o.get("status") == "待簽名" and "保險" in (o.get("goal") or "")]
+            if not _pending_sign:
+                _all_orders_for_sign = get_my_inquiries(st.session_state.user_id)
+                _pending_sign = [o for o in _all_orders_for_sign if o.get("status") == "待簽名" and "保險" in (o.get("goal") or "")]
+            if _pending_sign:
+                _ps = _pending_sign[0]
+                if st.button(
+                    f"✍️ 保單待簽名：{_ps['feedback_no']}",
+                    key="sidebar_sign_btn",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state.insurance_sign_no = _ps["feedback_no"]
+                    st.session_state.stage = "insurance_sign"
+                    st.rerun()
+
             with st.expander("📦 最近訂單", expanded=False):
                 for _qo in _quick_orders:
                     _qs = _qo.get("status", "待處理")
@@ -1477,6 +1500,77 @@ elif st.session_state.stage == "inquiry_form":
                 st.error(f"❌ 報名失敗：{result.get('message', '請稍後再試')}")
 
     else:
+        _goal_val = prefill.get("goal", "")
+        _is_ins_form = "保險" in _goal_val or "旅遊險" in _goal_val
+
+        if _is_ins_form:
+            # ── 旅遊保險申請表單（第一步：送出申請，不含簽名）────────────────
+            col_title.markdown("## 🛡️ 旅遊保險申請表")
+            st.caption("由統超保險經紀人提供服務。送出申請後，保險人員將審核並發送正式保單供您電子簽名確認。")
+            st.divider()
+
+            st.info("📋 **申請流程：** 送出申請 → 保險人員審核 → 發送正式保單 → 您電子簽名確認 → 保單生效")
+
+            ins_name = st.text_input(
+                "👤 申請人姓名 *",
+                value=prefill.get("contact_name", "") or st.session_state.get("username", ""),
+                key="ins_name",
+            )
+            ins_note = st.text_area(
+                "📝 旅遊詳情（目的地、出發日期、天數、人數等）",
+                value=prefill.get("note", ""),
+                placeholder="例：2026/8/1–8/5 澎湖旅遊，共 2 人，希望承保意外與醫療",
+                height=100,
+                key="ins_note",
+            )
+
+            can_submit_ins = bool(ins_name.strip())
+            if not can_submit_ins:
+                st.warning("⚠️ 請填寫申請人姓名後再送出。")
+
+            if st.button(
+                "📋 送出保險申請",
+                type="primary",
+                disabled=not can_submit_ins,
+                use_container_width=True,
+                key="ins_submit",
+            ):
+                with st.spinner("📡 建立保險申請中..."):
+                    _ins_params = {
+                        "goal":          "旅遊保險申請",
+                        "contact_name":  ins_name.strip(),
+                        "contact_phone": "",
+                        "budget":        0,
+                        "keyword":       "",
+                        "note":          ins_note or prefill.get("note", ""),
+                        "address":       "",
+                        "products_json": "",
+                        "user_id":       st.session_state.get("user_id") or 0,
+                        "images_json":   "[]",
+                    }
+                    result = _run_async(_submit_inquiry_via_mcp(_ins_params))
+
+                st.session_state.mcp_log.append({
+                    "tool": "submit_inquiry", "params": _ins_params,
+                    "result": result, "ts": datetime.now().strftime("%H:%M:%S"), "via": "mcp.Client",
+                })
+                if result.get("success"):
+                    inq_no = result.get("feedback_no") or result.get("inquiry_no", "")
+                    st.success(
+                        f"✅ **旅遊保險申請已送出！**\n\n"
+                        f"申請單號：`{inq_no}`\n\n"
+                        f"統超保險經紀人將於 **1 個工作天**內審核，審核完成後將通知您至「我的訂單」完成電子簽名。"
+                    )
+                    st.session_state.ollama_history.append(
+                        {"role": "assistant", "content": f"旅遊保險申請 `{inq_no}` 已送出！統超保險審核後會通知您前往「我的訂單」完成電子簽名，保單即可生效。"}
+                    )
+                    st.session_state.inquiry_prefill = {}
+                else:
+                    st.error(f"❌ 申請失敗：{result.get('message', '請稍後再試')}")
+            # 提前 return，不進入一般表單
+            st.stop()
+
+        # ── 一般服務諮詢表單 ─────────────────────────────────────────────────
         col_title.markdown("## 📋 服務諮詢確認表單")
         st.caption("AI 已根據對話幫您填入資訊，請確認或修改後再送出。")
         st.divider()
@@ -1656,10 +1750,13 @@ elif st.session_state.stage == "my_orders":
     st.divider()
 
     STATUS_CFG = {
-        "待處理": {"color": "#FF9800", "icon": "⏳"},
-        "配送中": {"color": "#1976D2", "icon": "🚚"},
-        "已拒絕": {"color": "#9E9E9E", "icon": "❌"},
-        "已完成": {"color": "#43A047", "icon": "✅"},
+        "待處理":   {"color": "#FF9800", "icon": "⏳"},
+        "待簽名":   {"color": "#9C27B0", "icon": "✍️"},
+        "待後台確認": {"color": "#2196F3", "icon": "🔍"},
+        "配送中":   {"color": "#1976D2", "icon": "🚚"},
+        "預留中":   {"color": "#7B5EA7", "icon": "📦"},
+        "已拒絕":   {"color": "#9E9E9E", "icon": "❌"},
+        "已完成":   {"color": "#43A047", "icon": "✅"},
     }
 
     if not orders:
@@ -1759,6 +1856,211 @@ elif st.session_state.stage == "my_orders":
                                 st.rerun()
                             else:
                                 st.warning("請輸入訊息內容。")
+
+                # ── 保險保單簽名按鈕（待簽名狀態） ─────────────────────────
+                _is_ins_order = "保險" in (inq.get("goal") or "")
+                if _is_ins_order and status == "待簽名":
+                    st.divider()
+                    st.warning("✍️ **保單已準備完成，請點擊下方按鈕閱讀條款並完成電子簽名。**")
+                    if st.button(
+                        "✍️ 前往簽署保單",
+                        key=f"sign_btn_{inq_id}",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        st.session_state.insurance_sign_no = inq_id
+                        st.session_state.stage = "insurance_sign"
+                        st.rerun()
+                elif _is_ins_order and status == "待後台確認":
+                    st.info("🔍 **您的簽名已送出，等待統超保險確認生效中。**")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGE: INSURANCE SIGN — 用戶簽署正式保單
+# ═════════════════════════════════════════════════════════════════════════════
+
+elif st.session_state.stage == "insurance_sign":
+    _sign_inq_id = st.session_state.get("insurance_sign_no", "")
+    col_back, col_title = st.columns([1, 6])
+    if col_back.button("← 返回訂單", key="sign_back"):
+        st.session_state.stage = "my_orders"
+        st.rerun()
+    col_title.markdown("## ✍️ 旅遊保險保單簽名確認")
+
+    if not _sign_inq_id:
+        st.error("找不到申請單資訊，請返回「我的訂單」重試。")
+        st.stop()
+
+    _sign_con = _db()
+    _sign_row = _sign_con.execute(
+        "SELECT * FROM pms_form_feedback WHERE feedback_no=?", (_sign_inq_id,)
+    ).fetchone()
+    _sign_con.close()
+
+    if not _sign_row:
+        st.error(f"找不到申請單 {_sign_inq_id}。")
+        st.stop()
+
+    _sign_row = dict(_sign_row)
+    if _sign_row.get("status") != "待簽名":
+        st.warning(f"此申請單目前狀態為「{_sign_row.get('status')}」，不需簽名或已完成。")
+        if st.button("返回我的訂單"):
+            st.session_state.stage = "my_orders"
+            st.rerun()
+        st.stop()
+
+    st.caption(f"申請單號：`{_sign_inq_id}`　｜　申請人：{_sign_row.get('contact_name','')}")
+    st.divider()
+
+    # ── 正式保單條款 ───────────────────────────────────────────────────────
+    st.markdown("### 📄 正式保單條款")
+    _note_val = _sign_row.get("note", "")
+    _policy_text = f"""統超保險旅遊綜合保險保單
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+申請單號：{_sign_inq_id}
+申請人：{_sign_row.get('contact_name','')}
+旅遊詳情：{_note_val or '（依申請書所載）'}
+
+【第一條 承保範圍】
+本保險承保被保險人於本保單所載旅遊期間內，因意外事故或突發疾病所致之損失：
+  1. 意外死亡及傷殘保險金：最高新台幣 300 萬元
+  2. 海外突發疾病醫療費用：最高新台幣 50 萬元（含急診、住院、手術費）
+  3. 旅遊不便補償：
+     ・行程延誤（逾 6 小時）：每次 NT$1,000，最高 NT$3,000
+     ・班機取消：最高 NT$5,000
+     ・行李遺失：最高 NT$10,000
+  4. 旅行文件遺失緊急協助（含護照補辦協助服務）
+
+【第二條 保險期間】
+以申請書所載旅遊出發日 00:00 起，至返回日 24:00 止。
+
+【第三條 被保險人資格】
+被保險人須具備以下條件：
+  ・年齡：滿 15 歲以上，未滿 75 歲
+  ・健康狀況：投保時未患有嚴重疾病或身心障礙
+  ・旅遊目的地：非外交部「警告」或「不建議前往」地區
+
+【第四條 理賠申請】
+發生保險事故後，請於事故發生後 30 日內聯繫本公司：
+  ・客服電話：0800-555-880（24 小時服務）
+  ・Email：claim@unisuperins.com.tw
+  ・需檢附：理賠申請書、醫療費用收據、事故證明文件
+
+【第五條 除外責任】
+本保險不承保下列情事所致之損失：
+  1. 被保險人故意或蓄意行為
+  2. 戰爭、內亂、恐怖攻擊期間所致
+  3. 核子輻射或放射性污染所致
+  4. 飲酒駕車或無照駕駛所致
+  5. 從事危險運動（高空跳傘、攀岩等）所致（需另外加保）
+
+【第六條 保費說明】
+保費依旅遊天數、目的地及承保人數計算，詳見另行寄送之費用明細。
+
+【第七條 爭議處理】
+本保單相關爭議依中華民國保險法規解決，並以台北地方法院為第一審管轄法院。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+統超保險經紀人股份有限公司
+統一編號：12345678
+客服電話：0800-555-880
+官方網站：www.unisuperins.com.tw
+"""
+    with st.container(border=True):
+        st.text(_policy_text)
+
+    # ── 商家留言 ───────────────────────────────────────────────────────────
+    _v_reply = _sign_row.get("vendor_reply", "")
+    if _v_reply:
+        for _vl in [l.strip() for l in _v_reply.split("\n") if l.strip()]:
+            st.info(f"🏪 保險專員：{_vl}")
+
+    st.divider()
+    st.markdown("#### ✍️ 電子簽名")
+    st.caption("請仔細閱讀上方條款後，在下方空白區域手寫您的簽名。完成後點擊「確認簽名送出」。")
+
+    _HAS_CANVAS_S = False
+    try:
+        from streamlit_drawable_canvas import st_canvas as _st_canvas_s
+        _HAS_CANVAS_S = True
+    except ImportError:
+        pass
+
+    _sig_img_data_s = None
+    _sig_text_s     = ""
+    if _HAS_CANVAS_S:
+        _canvas_res_s = _st_canvas_s(
+            fill_color="rgba(0,0,0,0)",
+            stroke_width=3,
+            stroke_color="#000080",
+            background_color="#f5f5f5",
+            height=160,
+            drawing_mode="freedraw",
+            key="policy_signature",
+        )
+        if _canvas_res_s.image_data is not None:
+            _sig_img_data_s = _canvas_res_s.image_data
+        _has_sig_s = _sig_img_data_s is not None and int(_sig_img_data_s.sum()) > 0
+    else:
+        st.warning("請安裝 streamlit-drawable-canvas 以啟用手寫簽名功能")
+        _sig_text_s = st.text_input("✍️ 輸入全名作為電子簽名替代", key="policy_sig_text")
+        _has_sig_s  = bool(_sig_text_s.strip())
+
+    _agree = st.checkbox(
+        "✅ 我已詳細閱讀上方保單條款，同意其內容並確認申請。",
+        key="policy_agree",
+    )
+    _can_sign = _has_sig_s and _agree
+
+    if not _can_sign:
+        st.warning("⚠️ 請完成簽名並勾選確認同意後再送出。")
+
+    if st.button(
+        "✍️ 確認簽名送出",
+        type="primary",
+        disabled=not _can_sign,
+        use_container_width=True,
+        key="policy_sign_submit",
+    ):
+        with st.spinner("📡 提交簽名中..."):
+            import uuid as _uuid2, os as _os2
+            _os2.makedirs("uploads", exist_ok=True)
+            _sig_path_s = ""
+            if _HAS_CANVAS_S and _sig_img_data_s is not None:
+                try:
+                    from PIL import Image as _PILImage2
+                    _pil2 = _PILImage2.fromarray(_sig_img_data_s.astype("uint8"), "RGBA")
+                    _sig_fname2 = f"sig_{_uuid2.uuid4().hex[:8]}.png"
+                    _sig_path_s = f"uploads/{_sig_fname2}"
+                    _pil2.save(_sig_path_s)
+                except Exception:
+                    pass
+            elif _sig_text_s:
+                _sig_path_s = _sig_text_s
+
+            _scon = _db()
+            _scon.execute(
+                "UPDATE pms_form_feedback SET status='待後台確認', images_json=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                (
+                    json.dumps([_sig_path_s] if _sig_path_s else [], ensure_ascii=False),
+                    f"{datetime.now().strftime('%m/%d %H:%M')} [用戶]: 已完成電子簽名，等待保單生效確認。\n",
+                    _sign_inq_id,
+                ),
+            )
+            _scon.commit()
+            _scon.close()
+
+        st.success(
+            f"✅ **簽名已送出！**\n\n"
+            f"申請單號：`{_sign_inq_id}`\n\n"
+            f"統超保險經紀人將確認您的簽名並使保單正式生效，確認後將寄送 Email 通知您。"
+        )
+        st.balloons()
+        if st.button("← 返回我的訂單", key="sign_done"):
+            st.session_state.stage = "my_orders"
+            st.session_state.insurance_sign_no = ""
+            st.rerun()
+    st.stop()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

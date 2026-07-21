@@ -255,6 +255,36 @@ except Exception:
 
 
 # ---------------------------------------------------------------------------
+# TDX 觀光 API — token 快取（有效期 ~24hr，自動更新）
+# ---------------------------------------------------------------------------
+_TDX_TOKEN: dict = {"token": "", "expires": 0.0}
+
+
+def _get_tdx_token() -> str:
+    """取得 TDX Bearer token；無憑證時回傳空字串（API 仍可低速率使用）。"""
+    import time
+    if _TDX_TOKEN["token"] and time.time() < _TDX_TOKEN["expires"]:
+        return _TDX_TOKEN["token"]
+    cid = os.environ.get("TDX_CLIENT_ID", "")
+    csec = os.environ.get("TDX_CLIENT_SECRET", "")
+    if not cid or not csec:
+        return ""
+    try:
+        r = requests.post(
+            "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token",
+            data={"grant_type": "client_credentials", "client_id": cid, "client_secret": csec},
+            timeout=10,
+        )
+        r.raise_for_status()
+        d = r.json()
+        _TDX_TOKEN["token"] = d["access_token"]
+        _TDX_TOKEN["expires"] = time.time() + d.get("expires_in", 86400) - 60
+        return _TDX_TOKEN["token"]
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # 工具 1：依關鍵字搜尋健康商品
 # ---------------------------------------------------------------------------
 @mcp.tool()
@@ -403,7 +433,8 @@ def submit_inquiry(goal: str, contact_name: str, contact_phone: str,
         return json.dumps({"success": False,
                            "message": "尚未收集到聯絡姓名，請先詢問用戶的姓名再呼叫此工具。"},
                           ensure_ascii=False)
-    if not contact_phone or not contact_phone.strip():
+    _is_ins_goal = any(k in (goal or "") for k in ("保險", "旅遊險", "投保"))
+    if not _is_ins_goal and (not contact_phone or not contact_phone.strip()):
         return json.dumps({"success": False,
                            "message": "尚未收集到聯絡電話，請先詢問用戶的電話再呼叫此工具。"},
                           ensure_ascii=False)
@@ -986,6 +1017,86 @@ def get_weather(lat: float = 0, lng: float = 0, city: str = "") -> str:
         return json.dumps({"success": False, "message": f"查詢天氣失敗：{str(e)}"}, ensure_ascii=False)
 
 
+def _search_711_pcsc(lat: float, lng: float, radius_m: int) -> list:
+    """用 7-ELEVEN 官方 emap.pcsc.com.tw 查附近門市，回傳與 find_nearby_stores 相同格式的 list。"""
+    import xml.etree.ElementTree as ET, math
+
+    def _dist(la, lo):
+        dlat = (la - lat) * 111000
+        dlng = (lo - lng) * 111000 * math.cos(math.radians(lat))
+        return math.sqrt(dlat**2 + dlng**2)
+
+    # 反向地理編碼取得縣市 / 行政區（繁體，pcsc 用台/不用臺）
+    city, town = "", ""
+    try:
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": lat, "lon": lng, "format": "jsonv2", "zoom": 12,
+                    "accept-language": "zh-TW"},
+            headers={"User-Agent": "LifeButlerBot/1.0 (Hackathon)"},
+            timeout=6,
+        )
+        if r.status_code == 200:
+            addr = r.json().get("address", {})
+            city = addr.get("city") or addr.get("county") or addr.get("state") or ""
+            town = (addr.get("suburb") or addr.get("town")
+                    or addr.get("neighbourhood") or addr.get("district") or "")
+    except Exception:
+        pass
+
+    if not city:
+        return []
+
+    # pcsc API 用「台」不用「臺」
+    city = city.replace("臺", "台")
+    town = town.replace("臺", "台")
+
+    # 呼叫 pcsc 官方 API（XML 格式，座標為 X/Y 整數，需除以 1,000,000）
+    def _pcsc_fetch(c: str, t: str):
+        resp = requests.post(
+            "https://emap.pcsc.com.tw/EMapSDK.aspx",
+            data={"commandid": "SearchStore", "city": c, "town": t},
+            headers={"Content-Type": "application/x-www-form-urlencoded; charset=utf-8"},
+            timeout=15,
+        )
+        resp.encoding = "utf-8"
+        return ET.fromstring(resp.text)
+
+    try:
+        root = _pcsc_fetch(city, town)
+        # town 不符時 pcsc 回 0，改用只帶 city 重查
+        if len(list(root.iter("GeoPosition"))) == 0 and town:
+            root = _pcsc_fetch(city, "")
+    except Exception:
+        return []
+
+    results = []
+    for geo in root.iter("GeoPosition"):
+        try:
+            s_lng = int((geo.findtext("X") or "0").strip()) / 1_000_000
+            s_lat = int((geo.findtext("Y") or "0").strip()) / 1_000_000
+        except (ValueError, TypeError):
+            continue
+        if not s_lat or not s_lng:
+            continue
+        dist = _dist(s_lat, s_lng)
+        if dist > radius_m:
+            continue
+        results.append({
+            "name":       f"7-ELEVEN {(geo.findtext('POIName') or '').strip()}".strip(),
+            "address":    (geo.findtext("Address") or "").strip(),
+            "lat":        s_lat,
+            "lng":        s_lng,
+            "phone":      (geo.findtext("Telno") or "").strip(),
+            "category":   "convenience",
+            "distance_m": round(dist),
+            "hours":      (geo.findtext("OP_TIME") or "").strip(),
+        })
+
+    results.sort(key=lambda x: x["distance_m"])
+    return results
+
+
 @mcp.tool()
 def find_nearby_stores(
     lat: Optional[float] = None,
@@ -1025,6 +1136,21 @@ def find_nearby_stores(
 
     if not name and not category:
         return json.dumps({"message": "請提供 name 或 category 參數。"}, ensure_ascii=False)
+
+    # 7-ELEVEN 優先使用官方 pcsc.com.tw API（資料最完整）
+    _711_ALIASES = {"7-ELEVEN", "7-11", "7ELEVEN", "711", "統一超商", "SEVEN", "SEVEN-ELEVEN"}
+    if name.upper().replace("-", "").replace(" ", "") in {
+        n.upper().replace("-", "").replace(" ", "") for n in _711_ALIASES
+    }:
+        stores_711 = _search_711_pcsc(lat, lng, radius_m)
+        if stores_711:
+            return json.dumps({
+                "count": len(stores_711),
+                "stores": stores_711[:12],
+                "search_label": "7-ELEVEN",
+                "source": "pcsc.com.tw（官方門市資料）",
+            }, ensure_ascii=False)
+        # pcsc 失敗時 fall-through 到 OSM
 
     _OVERPASS_MIRRORS = [
         "https://overpass-api.de/api/interpreter",
@@ -2211,6 +2337,130 @@ def find_sports_venues(
             f"找到 {len(results)} 個運動場館（篩選：{filters}）{source_note}。"
             if results else
             f"查無符合「{filters}」的運動場館，請嘗試調整關鍵字或放寬條件。"
+        ),
+    }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# 工具 19：TDX 觀光景點 / 餐廳 / 住宿 / 活動查詢
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def find_tourist_attractions(
+    keyword: str = "",
+    county: str = "",
+    category: str = "ScenicSpot",
+    top: int = 10,
+) -> str:
+    """搜尋全台觀光景點、餐廳、住宿、活動資訊（資料來源：交通部 TDX 觀光平台）。
+
+    當使用者詢問「附近有哪些景點」「台北好吃的餐廳」「花蓮住哪裡」「週末有什麼活動」
+    「旅遊規劃」「哪裡好玩」「景點推薦」「觀光」等問題時呼叫此工具。
+
+    參數:
+        keyword:  搜尋關鍵字，例如「夜市」「溫泉」「海邊」「博物館」「老街」
+        county:   縣市名稱（繁體），例如「臺北市」「高雄市」「花蓮縣」（留空=全台）
+        category: 資料類別：
+                    ScenicSpot = 景點（預設）
+                    Restaurant = 餐廳
+                    Hotel      = 住宿
+                    Activity   = 活動
+        top:      回傳筆數上限（預設 10，最大 30）
+
+    回傳:
+        JSON 字串，含 count / category / results 清單（name/description/address/city/phone/open_time/picture/lat/lng）。
+    """
+    token = _get_tdx_token()
+    top = min(int(top), 30)
+
+    valid_cats = {"ScenicSpot", "Restaurant", "Hotel", "Activity"}
+    if category not in valid_cats:
+        category = "ScenicSpot"
+
+    # 縣市代碼 → TDX 縣市名稱對照（本系統 county_code → 繁體名）
+    _CODE_MAP = {
+        "01": "臺北市", "02": "新北市", "03": "基隆市", "04": "桃園市",
+        "05": "新竹縣", "06": "新竹市", "07": "苗栗縣", "08": "臺中市",
+        "09": "南投縣", "10": "彰化縣", "11": "雲林縣", "12": "嘉義縣",
+        "13": "嘉義市", "14": "臺南市", "15": "高雄市", "16": "屏東縣",
+        "17": "宜蘭縣", "18": "花蓮縣", "19": "臺東縣", "20": "澎湖縣",
+        "21": "金門縣", "22": "連江縣",
+    }
+    # 若傳入的是數字代碼則轉換
+    if county and county in _CODE_MAP:
+        county = _CODE_MAP[county]
+    # 台 → 臺 正規化
+    county = county.replace("台北", "臺北").replace("台中", "臺中") \
+                   .replace("台南", "臺南").replace("台東", "臺東")
+
+    headers = {"Accept-Encoding": "gzip"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    # 有縣市時使用縣市子路徑（較快），否則全台搜尋
+    base = "https://tdx.transportdata.tw/api/basic/v2/Tourism"
+    url = f"{base}/{category}/{county}" if county else f"{base}/{category}"
+
+    params: dict = {
+        "$top": top,
+        "$format": "JSON",
+        "$select": "Name,Description,Address,City,Phone,OpenTime,Picture,Position",
+    }
+    filter_parts = []
+    if keyword:
+        filter_parts.append(f"contains(Name,'{keyword}')")
+    if filter_parts:
+        params["$filter"] = " and ".join(filter_parts)
+
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=15)
+        if r.status_code == 404 and county:
+            # 縣市子路徑不存在，退回全台並加 City filter
+            params2 = dict(params)
+            fp2 = filter_parts + [f"contains(City,'{county}')"]
+            params2["$filter"] = " and ".join(fp2)
+            r = requests.get(f"{base}/{category}", params=params2, headers=headers, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        hint = "請至 https://tdx.transportdata.tw 申請帳號並填入 .env 的 TDX_CLIENT_ID / TDX_CLIENT_SECRET。" \
+               if "401" in str(e) else "請稍後再試。"
+        return json.dumps({
+            "count": 0, "results": [],
+            "message": f"TDX API 無法連線（{e}）。{hint}",
+        }, ensure_ascii=False)
+
+    results = []
+    for item in data:
+        pic = ""
+        if isinstance(item.get("Picture"), dict):
+            pic = item["Picture"].get("PictureUrl1", "")
+        pos = item.get("Position") or {}
+        results.append({
+            "name":        item.get("Name", ""),
+            "description": (item.get("Description") or "")[:120],
+            "address":     item.get("Address", ""),
+            "city":        item.get("City", ""),
+            "phone":       item.get("Phone", ""),
+            "open_time":   item.get("OpenTime", ""),
+            "picture":     pic,
+            "lat":         pos.get("PositionLat"),
+            "lng":         pos.get("PositionLon"),
+        })
+
+    label = {"ScenicSpot": "景點", "Restaurant": "餐廳",
+              "Hotel": "住宿", "Activity": "活動"}.get(category, category)
+    conds = ([f"縣市={county}"] if county else []) + ([f"關鍵字={keyword}"] if keyword else [])
+    cond_str = "、".join(conds) or "不限條件"
+
+    return json.dumps({
+        "count":       len(results),
+        "category":    label,
+        "results":     results,
+        "data_source": "交通部 TDX 觀光資料平台",
+        "message": (
+            f"找到 {len(results)} 筆{label}資訊（{cond_str}）。"
+            if results else
+            f"查無「{cond_str}」的{label}資訊，請嘗試調整關鍵字或縣市。"
         ),
     }, ensure_ascii=False)
 
