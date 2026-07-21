@@ -820,7 +820,7 @@ def _render_store_map(stores: list, user_lat, user_lng):
     st_folium(m, width="100%", height=420, returned_objects=[])
 
 
-def render_tool_results(tool_calls: list):
+def render_tool_results(tool_calls: list, msg_idx: int = 0):
     for tc in tool_calls:
         tool   = tc["tool"]
         result = tc["result"]
@@ -926,16 +926,34 @@ def render_tool_results(tool_calls: list):
                 products_rec = result.get("recommended_products", [])
                 if products_rec:
                     st.markdown("**🛒 推薦補充商品**")
-                    for p in products_rec:
+                    for _rp_idx, p in enumerate(products_rec):
                         vendor = p.get("vendor", "")
                         emoji  = VENDOR_EMOJI.get(vendor, "⚪")
-                        st.markdown(
+                        _rpc1, _rpc2 = st.columns([5, 1])
+                        _rpc1.markdown(
                             f"**{emoji} {p.get('name', '')}** &nbsp;`{vendor}`  \n"
                             f"🥩 {p.get('protein_g', 0)}g蛋白質 ｜ "
                             f"🔥 {p.get('calories', 0)} kcal ｜ "
                             f"💰 **${p.get('price', 0)}** ｜ "
                             f"📦 庫存 {p.get('stock', 0)}"
                         )
+                        if p.get("stock", 0) > 0:
+                            _rp_key = f"cart_add_{msg_idx}_rec_{_rp_idx}"
+                            _in_cart = any(c["name"] == p.get("name") for c in st.session_state.get("cart", []))
+                            if _in_cart:
+                                _rpc2.markdown("✅ 已加入")
+                            elif _rpc2.button("🛒 加入", key=_rp_key, use_container_width=True):
+                                _cart = st.session_state.get("cart", [])
+                                _cart.append({
+                                    "name":      p.get("name", ""),
+                                    "vendor":    vendor,
+                                    "price":     p.get("price", 0),
+                                    "protein_g": p.get("protein_g", 0),
+                                    "calories":  p.get("calories", 0),
+                                    "stock":     p.get("stock", 0),
+                                })
+                                st.session_state.cart = _cart
+                                st.rerun()
             continue
 
         # ── 商品列表（search / recommend / inventory）────────────────────────
@@ -954,18 +972,36 @@ def render_tool_results(tool_calls: list):
                 c3.metric("花費",       f"${result.get('total_price', 0)}")
                 st.divider()
 
-            for p in products:
+            for p_idx, p in enumerate(products):
                 vendor = p.get("vendor", "")
                 stock  = p.get("stock", 0)
                 emoji  = VENDOR_EMOJI.get(vendor, "⚪")
                 status = f"庫存 {stock}" if stock > 0 else "❌ 售完"
-                st.markdown(
+                _pc1, _pc2 = st.columns([5, 1])
+                _pc1.markdown(
                     f"**{emoji} {p.get('name', '')}** &nbsp;`{vendor}`  \n"
                     f"🥩 {p.get('protein_g', 0)} g蛋白質 ｜ "
                     f"🔥 {p.get('calories', 0)} kcal ｜ "
                     f"💰 **${p.get('price', 0)}** ｜ "
                     f"📦 {status}"
                 )
+                if stock > 0:
+                    _cart_key = f"cart_add_{msg_idx}_{tool}_{p_idx}"
+                    _in_cart = any(c["name"] == p.get("name") for c in st.session_state.get("cart", []))
+                    if _in_cart:
+                        _pc2.markdown("✅ 已加入")
+                    elif _pc2.button("🛒 加入", key=_cart_key, use_container_width=True):
+                        _cart = st.session_state.get("cart", [])
+                        _cart.append({
+                            "name":      p.get("name", ""),
+                            "vendor":    vendor,
+                            "price":     p.get("price", 0),
+                            "protein_g": p.get("protein_g", 0),
+                            "calories":  p.get("calories", 0),
+                            "stock":     stock,
+                        })
+                        st.session_state.cart = _cart
+                        st.rerun()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1021,6 +1057,7 @@ for k, v in {
     "inquiry_prefill":    {},
     "inquiry_products":   [],
     "conversation_id":    None,
+    "cart":               [],
     "last_products":      [],
     "_pending_delete_id": None,
     "insurance_sign_no": "",
@@ -1057,6 +1094,7 @@ with st.sidebar:
                 "claude_msgs":     [],
                 "ollama_history":  [],
                 "mcp_log":         [],
+                "cart":            [],
                 "last_products":   [],
                 "conversation_id": None,
                 "stage":           "chat",
@@ -2392,12 +2430,47 @@ elif st.session_state.stage == "chat":
         st.divider()
 
     # ── 2. 顯示歷史訊息 ────────────────────────────────────────────
-    for msg in st.session_state.display_msgs:
+    for _midx, msg in enumerate(st.session_state.display_msgs):
         avatar = "👤" if msg["role"] == "user" else "🌿"
         with st.chat_message(msg["role"], avatar=avatar):
             st.markdown(_strip_images(msg["content"]))
             if msg.get("tool_calls"):
-                render_tool_results(msg["tool_calls"])
+                render_tool_results(msg["tool_calls"], msg_idx=_midx)
+
+    # ── 購物清單（chat_input 上方）──────────────────────────────────
+    _cart = st.session_state.get("cart", [])
+    if _cart:
+        with st.container(border=True):
+            st.markdown("🛒 **購物清單**")
+            for _ci_idx, _item in enumerate(_cart):
+                _iv = VENDOR_EMOJI.get(_item.get("vendor", ""), "⚪")
+                _cc1, _cc2, _cc3 = st.columns([4, 1, 1])
+                _cc1.markdown(f"{_iv} **{_item['name']}** `{_item.get('vendor','')}`")
+                _cc2.markdown(f"💰 ${_item.get('price', 0)}")
+                if _cc3.button("✕", key=f"cart_del_{_ci_idx}", use_container_width=True):
+                    st.session_state.cart.pop(_ci_idx)
+                    st.rerun()
+            _total = sum(p.get("price", 0) for p in _cart)
+            _bt1, _bt2, _bt3 = st.columns([2, 1, 2])
+            _bt1.markdown(f"**合計：${_total}**")
+            if _bt2.button("🗑️ 清空", key="cart_clear", use_container_width=True):
+                st.session_state.cart = []
+                st.rerun()
+            if _bt3.button("📋 建立諮詢單", type="primary", key="cart_order", use_container_width=True):
+                _cart_products_json = json.dumps(
+                    [{"name": p["name"], "vendor": p.get("vendor", ""), "price": p.get("price", 0)} for p in _cart],
+                    ensure_ascii=False
+                )
+                st.session_state.inquiry_prefill = {
+                    "goal":          "商品採買",
+                    "contact_name":  st.session_state.get("username", ""),
+                    "contact_phone": st.session_state.get("user_contact_phone", ""),
+                    "address":       st.session_state.get("user_address", ""),
+                    "products_json": _cart_products_json,
+                }
+                st.session_state.inquiry_products = _cart.copy()
+                st.session_state.stage = "inquiry_form"
+                st.rerun()
 
     # ── 3. 接收新輸入 ───────────────────────────────────────────────
     _ep = st.session_state.get("_pending_prompt")
@@ -2406,6 +2479,24 @@ elif st.session_state.stage == "chat":
     _ci = st.chat_input("輸入您的需求或回覆...")
     prompt = _ep or _ci
     if prompt:
+        # 購物清單下單意圖偵測（在送給 AI 之前攔截）
+        _ORDER_KWS = ["訂購這些", "下單這些", "買這些", "購買這些", "我要這些", "確認購買", "幫我訂這些", "下單了"]
+        if any(kw in prompt for kw in _ORDER_KWS) and st.session_state.get("cart"):
+            _ocart = st.session_state.cart
+            _ocart_json = json.dumps(
+                [{"name": p["name"], "vendor": p.get("vendor", ""), "price": p.get("price", 0)} for p in _ocart],
+                ensure_ascii=False
+            )
+            st.session_state.inquiry_prefill = {
+                "goal":          "商品採買",
+                "contact_name":  st.session_state.get("username", ""),
+                "contact_phone": st.session_state.get("user_contact_phone", ""),
+                "address":       st.session_state.get("user_address", ""),
+                "products_json": _ocart_json,
+            }
+            st.session_state.inquiry_products = _ocart.copy()
+            st.session_state.stage = "inquiry_form"
+            st.rerun()
         with st.chat_message("user", avatar="👤"):
             st.markdown(prompt)
 
@@ -2457,7 +2548,7 @@ elif st.session_state.stage == "chat":
             if not navigating_to_form and not _had_error:
                 st.markdown(_strip_images(text))
                 if tool_calls:
-                    render_tool_results(tool_calls)
+                    render_tool_results(tool_calls, msg_idx=9999)
 
         # 更新顯示訊息與 MCP 紀錄（錯誤時不寫入，讓用戶重試）
         if not _had_error:
