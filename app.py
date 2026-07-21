@@ -2219,29 +2219,68 @@ elif st.session_state.stage == "chat":
         else:
             username = st.session_state.username
             _model_name = "GPT-4o" if using_gpt else OLLAMA_MODEL
-            # 情境感知：取得當前時間與天氣
+            # 情境感知：取得當前時間與天氣，產生個人化推薦
             try:
                 from mcp_server import get_current_time, get_weather
                 import json as _j
                 _time_info = _j.loads(get_current_time())
                 _hour = int(_time_info.get("hour", 12))
                 _greeting = "早安" if _hour < 11 else ("午安" if _hour < 14 else ("午後好" if _hour < 17 else ("晚安" if _hour >= 21 else "晚上好")))
-                _weather_raw = _j.loads(get_weather(city="台北"))
+
+                # 取得用戶所在縣市（有 GPS 用反地理編碼，否則用帳號設定）
+                _ulat = st.session_state.get("user_lat")
+                _ulng = st.session_state.get("user_lng")
+                _user_city = "台北"
+                if _ulat and _ulng:
+                    _rev = _reverse_geocode(_ulat, _ulng)
+                    if _rev:
+                        _user_city = _rev.split("市")[0] + "市" if "市" in _rev else _rev.split("縣")[0] + "縣" if "縣" in _rev else "台北"
+                else:
+                    from app_helpers import _db as _adb
+                    _ucon = _adb()
+                    _urow = _ucon.execute(
+                        "SELECT sc.name FROM users u JOIN sys_county sc ON sc.code=u.county_code WHERE u.id=?",
+                        (st.session_state.get("user_id", 0),)
+                    ).fetchone()
+                    _ucon.close()
+                    if _urow:
+                        _user_city = _urow[0]
+
+                _weather_raw = _j.loads(get_weather(city=_user_city))
                 _wdesc = _weather_raw.get("description", "")
-                _temp  = _weather_raw.get("temperature_c", "")
-                _ctx = f"目前台北 {_temp}°C、{_wdesc}。" if _temp else ""
+                _temp  = _weather_raw.get("temperature", "")
+                _code  = _weather_raw.get("weather_code", 0)
+
+                # 根據天氣 code（分類）+ 時段產生統一集團情境推薦
+                _recs = []
+                if 51 <= _code <= 99:   # 雨天（毛毛雨/雨/陣雨）
+                    _recs.append("🌧️ 外頭下雨，可以讓我幫您安排**7-11 外送到府**，不用出門")
+                elif _code <= 3:         # 晴/多雲
+                    _recs.append("☀️ 天氣晴朗，適合外出運動，要不要查查附近**Being Sport 課程**或**公共運動場館**？")
+                if _hour < 11:
+                    _recs.append("🥐 早晨好時光，**Mister Donut** 或 **統一星巴克** 的早餐點心現在有供應")
+                elif 11 <= _hour < 14:
+                    _recs.append("🍱 午餐時段，**7-11 舒肥雞胸肉**搭配**萬家福新鮮蔬菜**是高蛋白好選擇")
+                elif _hour >= 20:
+                    _recs.append("🍺 輕鬆夜晚，**21plus 精選啤酒**或**聖德科斯天然果汁**讓您放鬆一下")
+
+                _ctx = f"📍 {_user_city}　🌡️ {_temp}°C　{_wdesc}" if _temp else ""
+                _rec_str = "\n".join(f"- {r}" for r in _recs[:2]) if _recs else ""
             except Exception:
                 _greeting = "您好"
                 _ctx = ""
+                _rec_str = ""
+
             text = (
                 f"{_greeting}，{username}！我是您的 統一生活管家 🏪\n\n"
                 + (f"{_ctx}\n\n" if _ctx else "")
+                + (_rec_str + "\n\n" if _rec_str else "")
                 + f"由 **{_model_name}** 透過 **MCP 協議**真實呼叫工具，"
                 f"幫您在 7-11、萬家福、康是美、統一生機、Mister Donut、Cold Stone、21plus、統一星巴克、聖德科斯 採買！\n\n"
                 f"請告訴我您的需求，例如：\n"
                 f"- 「我想增肌，預算 500 元」\n"
-                f"- 「有沒有雞胸肉」\n"
-                f"- 「乳清蛋白庫存還有嗎」"
+                f"- 「附近有沒有統一門市」\n"
+                f"- 「幫我規劃旅遊保險」"
             )
             st.session_state.ollama_history = [
                 {"role": "user",
