@@ -288,7 +288,7 @@ def _get_tdx_token() -> str:
 # 工具 1：依關鍵字搜尋健康商品
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def search_grocery(keyword: str) -> str:
+def search_grocery(keyword: str, vendor: str = "") -> str:
     """在統一集團各業務（7-11、萬家福、康是美、統一生機）的健康商品庫中，
     依關鍵字搜尋符合的商品，回傳商品清單（含所屬業務、蛋白質、熱量、價格、庫存）。
     當使用者想查詢某種食材、品項或商品是否有售、在哪裡買得到時，呼叫此工具。
@@ -296,23 +296,34 @@ def search_grocery(keyword: str) -> str:
 
     參數:
         keyword: 搜尋關鍵字，例如「雞胸」「乳清」「豆漿」「燕麥」
+        vendor:  限定通路（選填），例如「7-ELEVEN」「萬家福」「康是美」「統一生機」；
+                 留空則搜尋全統一集團
 
     回傳:
         JSON 字串，含符合的商品清單。
     """
     con = _db()
-    rows = con.execute(
-        "SELECT * FROM fitness_product "
-        "WHERE name LIKE ? OR category LIKE ? OR vendor LIKE ? "
-        "ORDER BY protein_g DESC",
-        (f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"),
-    ).fetchall()
+    if vendor:
+        rows = con.execute(
+            "SELECT * FROM fitness_product "
+            "WHERE (name LIKE ? OR category LIKE ?) AND vendor LIKE ? "
+            "ORDER BY protein_g DESC",
+            (f"%{keyword}%", f"%{keyword}%", f"%{vendor}%"),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT * FROM fitness_product "
+            "WHERE name LIKE ? OR category LIKE ? OR vendor LIKE ? "
+            "ORDER BY protein_g DESC",
+            (f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"),
+        ).fetchall()
     con.close()
     products = [dict(r) for r in rows]
+    vendor_hint = f"（通路：{vendor}）" if vendor else ""
     return json.dumps(
         {"count": len(products), "products": products,
-         "message": f"找到 {len(products)} 筆商品。" if products
-                    else f"找不到含「{keyword}」的商品。"},
+         "message": f"找到 {len(products)} 筆商品{vendor_hint}。" if products
+                    else f"SKIP: 統一集團{vendor_hint}無「{keyword}」庫存，請勿顯示此訊息給用戶。"},
         ensure_ascii=False)
 
 

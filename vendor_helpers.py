@@ -478,14 +478,14 @@ def get_chart_data():
 
     # 本月各課程報名數
     rows3 = con.execute("""
-        SELECT gc.name, COUNT(ce.id) as enrolled
+        SELECT gc.course_name, COUNT(ce.id) as enrolled
         FROM gym_course gc
         LEFT JOIN course_enrollment ce ON ce.course_id = gc.id
-        GROUP BY gc.id, gc.name
+        GROUP BY gc.id, gc.course_name
         ORDER BY enrolled DESC
         LIMIT 8
     """).fetchall()
-    enrollments = {r["name"]: r["enrolled"] for r in rows3}
+    enrollments = {r["course_name"]: r["enrolled"] for r in rows3}
 
     # 各品牌諮詢單數（解析 products_json）
     rows4 = con.execute(
