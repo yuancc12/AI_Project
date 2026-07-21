@@ -2445,52 +2445,32 @@ elif st.session_state.stage == "chat":
             if msg.get("tool_calls"):
                 render_tool_results(msg["tool_calls"], msg_idx=_midx)
 
-    # ── 已選商品 Pills（chat_input 上方）─────────────────────────────
+    # ── 已選商品 Pills（chat_input 正上方，融入聊天區域）───────────────
     _cart = st.session_state.get("cart", {})
     if _cart:
-        # CSS：橢圓 pill 樣式
         st.markdown("""<style>
-.cart-pill-wrap{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 0 4px;}
 .cpill{display:inline-block;background:#e8f5e9;border:1.5px solid #00833D;
-       border-radius:999px;padding:4px 14px;font-size:13px;color:#1a5c35;
-       font-weight:600;white-space:nowrap;}
+       border-radius:999px;padding:3px 13px;font-size:13px;color:#1a5c35;
+       font-weight:600;white-space:nowrap;line-height:1.6;}
+/* 移除按鈕縮小化 */
+div[data-testid="stHorizontalBlock"] button[kind="secondary"]{
+    padding:2px 6px!important;font-size:12px!important;
+    border-radius:999px!important;min-height:0!important;}
 </style>""", unsafe_allow_html=True)
 
-        # Pills 顯示（HTML）
-        _pills_html = '<div class="cart-pill-wrap">'
-        for _pn, _pi in _cart.items():
+        for _ri, (_pn, _pi) in enumerate(list(_cart.items())):
             _qty = _pi["qty"]
-            _lbl = f"{_pn} ×{_qty}" if _qty > 1 else _pn
-            _pills_html += f'<span class="cpill">🛒 {_lbl}</span>'
-        _pills_html += '</div>'
-        st.markdown(_pills_html, unsafe_allow_html=True)
-
-        # 移除按鈕 + 合計 + 下單（一行）
-        _pnames = list(_cart.keys())
-        _rm_cols = st.columns([1] * len(_pnames) + [2, 2])
-        for _ri, _pn in enumerate(_pnames):
-            if _rm_cols[_ri].button(f"✕", key=f"pill_rm_{_ri}", use_container_width=True, help=f"移除 {_pn}"):
+            _lbl = f"🛒 {_pn} ×{_qty}" if _qty > 1 else f"🛒 {_pn}"
+            _pc, _prm = st.columns([7, 1])
+            _pc.markdown(f'<span class="cpill">{_lbl}</span>', unsafe_allow_html=True)
+            if _prm.button("✕", key=f"pill_rm_{_ri}", use_container_width=True, help=f"移除 {_pn}"):
                 _c = dict(st.session_state.cart)
                 del _c[_pn]
                 st.session_state.cart = _c
                 st.rerun()
+
         _total = sum(v["price"] * v["qty"] for v in _cart.values())
-        _rm_cols[len(_pnames)].markdown(f"💰 **${_total}**")
-        if _rm_cols[len(_pnames) + 1].button("📋 建立諮詢單", type="primary", key="cart_order", use_container_width=True):
-            _order_list = [
-                {"name": n, "vendor": v.get("vendor",""), "price": v["price"], "qty": v["qty"]}
-                for n, v in _cart.items()
-            ]
-            st.session_state.inquiry_prefill = {
-                "goal":          "商品採買",
-                "contact_name":  st.session_state.get("username", ""),
-                "contact_phone": st.session_state.get("user_contact_phone", ""),
-                "address":       st.session_state.get("user_address", ""),
-                "products_json": json.dumps(_order_list, ensure_ascii=False),
-            }
-            st.session_state.inquiry_products = list(_cart.values())
-            st.session_state.stage = "inquiry_form"
-            st.rerun()
+        st.markdown(f'💰 **${_total}**')
 
     # ── 3. 接收新輸入 ───────────────────────────────────────────────
     _ep = st.session_state.get("_pending_prompt")
