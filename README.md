@@ -10,7 +10,7 @@
 
 - Python 3.11+，套件管理器：**uv**
 - [Ollama](https://ollama.com/) 本地執行（模型：`qwen2.5:7b`，後台 AI 助手使用）
-- Anthropic API Key（前端 AI 使用 Claude claude-sonnet-4-6）
+- Anthropic API Key（前端 AI 使用 Claude Sonnet `claude-sonnet-4-6`）
 
 ---
 
@@ -186,6 +186,6 @@ TDX_CLIENT_SECRET=
 
 | 模式 | 模型 | 設定 |
 |------|------|------|
-| 雲端（前端預設） | Claude `claude-sonnet-4-6` | 登入頁輸入 Anthropic API Key |
+| 雲端（前端預設） | Claude Sonnet `claude-sonnet-4-6` | 登入頁輸入 Anthropic API Key |
 | 本地 | Ollama `qwen2.5:7b` | 自動偵測 `http://localhost:11434` |
 | 後台 AI 助手 | Ollama `qwen2.5:7b` | 固定本地，呼叫 `dispatch_delivery` |

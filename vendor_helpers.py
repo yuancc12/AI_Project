@@ -67,7 +67,7 @@ MCP_TOOLS = [
     {
         "no": 1, "name": "search_grocery",
         "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
-        "desc": "依關鍵字搜尋統一集團各業務（7-11、萬家福、康是美、統一生機）的健康商品，回傳商品清單與蛋白質 / 熱量 / 價格 / 庫存資訊。每次只接受一個關鍵字。",
+        "desc": "依關鍵字搜尋統一集團各業務（7-11、萬家福、康是美、統一生機等 9 大通路）的商品，回傳商品清單與蛋白質 / 熱量 / 價格 / 庫存資訊。每次只接受一個關鍵字。",
         "trigger": "用戶詢問「有沒有雞胸肉」「乳清蛋白哪裡賣」時，AI 透過 mcp.Client 真實呼叫。",
     },
     {
@@ -85,29 +85,35 @@ MCP_TOOLS = [
     {
         "no": 4, "name": "submit_inquiry",
         "type": "🔴 寫入", "caller": "前端 AI（用戶確認後）",
-        "desc": "將用戶的健康採買需求寫入後台諮詢單（pms_form_feedback 表），產生諮詢單號 FB...，讓後台人員跟進。products_json 只放用戶明確指定的商品。",
+        "desc": "將用戶需求寫入後台諮詢單（pms_form_feedback 表），產生諮詢單號 FB...，支援採買 / 旅遊保險 / 搬家 / 理財等所有 goal 類型。products_json 只放用戶明確指定的商品。",
         "trigger": "用戶同意 → AI 收集姓名電話 → 再次確認 → 透過 mcp.Client 呼叫，嚴禁未確認就寫入。",
     },
     {
         "no": 5, "name": "dispatch_delivery",
         "type": "🔴 寫入", "caller": "後台 AI 助手（接單後）",
-        "desc": "後台人員接受採買諮詢單後，建立外送配送訂單（DL...），更新諮詢單狀態為「配送中」，並自動扣減各商品庫存（每項 -1）。",
+        "desc": "後台人員接受採買諮詢單後，建立外送配送訂單（ORD...），更新諮詢單狀態為「配送中」，自動扣減各商品庫存，並自動發 Email 通知用戶。",
         "trigger": "後台 AI 助手確認廠商資訊後呼叫，或後台人員手動填寫後透過 mcp.Client 執行。",
     },
     {
-        "no": 6, "name": "get_current_time",
+        "no": 6, "name": "get_partner_vendors",
+        "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
+        "desc": "查詢系統合作廠商清單，涵蓋健身房（Being Sport）、搬家、清潔、快遞（統一速達）、旅遊保險（統超保險）、金融理財（統一證券）等，回傳廠商名稱、服務項目、聯絡方式與服務地區。",
+        "trigger": "用戶詢問「有哪些合作廠商」「可以幫我找搬家公司嗎」「保險怎麼申請」時呼叫。",
+    },
+    {
+        "no": 7, "name": "get_current_time",
         "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
         "desc": "取得台灣當前時間、日期、星期幾與時段（清晨／早晨／下午／晚上），供 AI 判斷門市營業狀況或給出時段相關建議。",
         "trigger": "用戶詢問「現在幾點」「今天星期幾」「還有開嗎」時呼叫。",
     },
     {
-        "no": 7, "name": "get_weather",
+        "no": 8, "name": "get_weather",
         "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
         "desc": "透過 Open-Meteo 免費 API（無需 API 金鑰）查詢指定地點的即時天氣，回傳氣溫、體感溫度、天氣狀況（WMO 代碼對應繁體中文描述）、濕度、風速，並依天氣狀況給出外出採買或戶外運動的建議。",
         "trigger": "用戶詢問「現在天氣如何」「適合出門嗎」「會下雨嗎」「要帶傘嗎」時呼叫；系統自動注入 GPS 座標，無 GPS 時可傳入城市名稱。",
     },
     {
-        "no": 8, "name": "search_recipe",
+        "no": 9, "name": "search_recipe",
         "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
         "desc": (
             "依料理名稱或食材搜尋食譜，回傳食材清單、烹飪步驟、所需時間與營養資訊。"
@@ -118,52 +124,52 @@ MCP_TOOLS = [
         "trigger": "用戶詢問「用雞胸肉可以做什麼」「推薦低卡晚餐食譜」「蛋炒飯怎麼做」「今天吃什麼」時呼叫。",
     },
     {
-        "no": 10, "name": "find_nearby_stores",
+        "no": 10, "name": "analyze_meal_nutrition",
+        "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
+        "desc": "根據食物名稱與攝取克數，查詢並計算該份量的熱量與三大營養素。每次只查一種食物；用戶說出多種食物時，AI 應逐項呼叫並將結果加總。優先使用 Edamam API（需設定環境變數），無金鑰時自動改用 Open Food Facts。",
+        "trigger": "用戶描述今天吃了什麼（「我吃了雞胸肉 150g 和白飯 400g」）時，AI 逐項呼叫，再將加總結果傳給 recommend_after_meal。",
+    },
+    {
+        "no": 11, "name": "recommend_after_meal",
+        "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
+        "desc": "根據今日已攝取的總熱量與總蛋白質，對比健康目標（增肌 2500 kcal / 減脂 1800 kcal）的每日建議量，從庫存商品中推薦應補充採買的品項（最多 5 項）。",
+        "trigger": "analyze_meal_nutrition 多次呼叫後，將 calories 與 protein_g 加總，傳入此工具取得個人化採買建議。",
+    },
+    {
+        "no": 12, "name": "calculate_tdee",
+        "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
+        "desc": "依 Mifflin-St Jeor 公式計算基礎代謝率（BMR）與每日總能量消耗（TDEE），並依目標給出建議熱量與三大營養素配比。已登入用戶只需傳入 user_id，工具自動從 DB 讀取身高、體重、年齡、性別。",
+        "trigger": "用戶詢問「TDEE」「每日需要吃多少卡」「基礎代謝是多少」時才呼叫；採買推薦場景不呼叫此工具。",
+    },
+    {
+        "no": 13, "name": "get_gym_courses",
+        "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
+        "desc": "查詢合作健身房（Being Sport）本月全部開課課程，回傳課程名稱、教練、時間、剩餘名額與月費。工具回傳所有課程，由 AI 依用戶需求推薦。",
+        "trigger": "用戶詢問「有什麼運動課程」「健身課怎麼報名」「找附近健身課程」時呼叫，不傳篩選參數直接取全部。",
+    },
+    {
+        "no": 14, "name": "enroll_gym_course",
+        "type": "🔴 寫入", "caller": "前端 AI（用戶確認後）",
+        "desc": "報名 Being Sport 健身課程，同時建立諮詢單（FB...）與報名紀錄（course_enrollment），並更新課程已報名人數。人數達最低開課門檻時回傳提示。支援多課程一張諮詢單（course_names_json 參數）。",
+        "trigger": "用戶確認要報名某課程，AI 收集姓名與電話後呼叫；嚴禁未確認就寫入。",
+    },
+    {
+        "no": 15, "name": "find_nearby_stores",
         "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
         "desc": (
             "以用戶 GPS 座標為圓心，透過 Overpass API（OpenStreetMap）搜尋附近地點，支援三種模式：\n"
             "① 品牌模式：輸入「7-11/超商/萬家福/藥妝/康是美/統一生機」→ 只搜統一集團對應門市\n"
             "② 場所模式：輸入「餐廳/健康餐廳/素食/咖啡廳/健身房/藥局/診所/早餐/麵包」→ 搜 OSM 對應 amenity/shop/leisure 標籤\n"
             "③ 關鍵字模式：輸入「拉麵/燒肉/火鍋/健康」等任意文字 → 用名稱模糊比對搜尋全 OSM\n"
-            "留空時預設搜索附近所有統一集團門市。"
+            "留空時預設搜索附近所有統一集團門市。7-ELEVEN 優先使用 pcsc.com.tw 官方 API。"
         ),
         "trigger": "用戶詢問「附近哪裡可以買」「最近的 7-11 在哪」「附近有健康餐廳嗎」「附近咖啡廳」「健身房在哪」時，系統自動注入 GPS 座標後呼叫。",
     },
     {
-        "no": 11, "name": "find_route",
+        "no": 16, "name": "find_route",
         "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
         "desc": "給定多個取貨停靠點，以 OSRM（OpenStreetMap Routing Machine）計算最佳配送路線與實際道路距離；若 OSRM 無法連線，自動退回最近鄰貪婪演算法。停靠點無座標時自動呼叫 Nominatim 地理編碼。",
         "trigger": "用戶詢問「最佳外送路線」「要先去哪家取貨」或後台安排多點取貨時使用。",
-    },
-    {
-        "no": 12, "name": "analyze_meal_nutrition",
-        "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
-        "desc": "根據食物名稱與攝取克數，查詢並計算該份量的熱量與三大營養素。每次只查一種食物；用戶說出多種食物時，AI 應逐項呼叫並將結果加總。優先使用 Edamam API（需設定環境變數），無金鑰時自動改用 Open Food Facts。",
-        "trigger": "用戶描述今天吃了什麼（「我吃了雞胸肉 150g 和白飯 400g」）時，AI 逐項呼叫，再將加總結果傳給 recommend_after_meal。",
-    },
-    {
-        "no": 13, "name": "recommend_after_meal",
-        "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
-        "desc": "根據今日已攝取的總熱量與總蛋白質，對比健康目標（增肌 2500 kcal / 減脂 1800 kcal）的每日建議量，從庫存商品中推薦應補充採買的品項（最多 5 項）。",
-        "trigger": "analyze_meal_nutrition 多次呼叫後，將 calories 與 protein_g 加總，傳入此工具取得個人化採買建議。",
-    },
-    {
-        "no": 14, "name": "calculate_tdee",
-        "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
-        "desc": "依 Mifflin-St Jeor 公式計算基礎代謝率（BMR）與每日總能量消耗（TDEE），並依目標給出建議熱量與三大營養素配比。已登入用戶只需傳入 user_id，工具自動從 DB 讀取身高、體重、年齡、性別。",
-        "trigger": "用戶詢問「TDEE」「每日需要吃多少卡」「基礎代謝是多少」時才呼叫；採買推薦場景不呼叫此工具。",
-    },
-    {
-        "no": 15, "name": "get_gym_courses",
-        "type": "🟢 讀取", "caller": "前端 AI（Ollama / Claude）",
-        "desc": "查詢合作健身房（Being Sport）本月全部開課課程，回傳課程名稱、教練、時間、剩餘名額與月費。工具回傳所有課程，由 AI 依用戶需求推薦。",
-        "trigger": "用戶詢問「有什麼運動課程」「健身課怎麼報名」「找附近健身課程」時呼叫，不傳篩選參數直接取全部。",
-    },
-    {
-        "no": 16, "name": "enroll_gym_course",
-        "type": "🔴 寫入", "caller": "前端 AI（用戶確認後）",
-        "desc": "報名 Being Sport 健身課程，同時建立諮詢單（FB...）與報名紀錄（course_enrollment），並更新課程已報名人數。人數達最低開課門檻時回傳提示。",
-        "trigger": "用戶確認要報名某課程，AI 收集姓名與電話後呼叫；嚴禁未確認就寫入。",
     },
     {
         "no": 17, "name": "find_sports_venues",
@@ -180,9 +186,9 @@ MCP_TOOLS = [
     },
     {
         "no": 18, "name": "send_email_notification",
-        "type": "🔴 寫入", "caller": "後台 AI 助手 / dispatch_delivery 自動觸發",
-        "desc": "透過 SMTP 發送 Email 通知給指定收件人。dispatch_delivery 接單成功後自動查詢用戶 Email 並發送接單通知；後台 AI 助手也可主動呼叫發送任意通知信。需在 .env 設定 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS。",
-        "trigger": "①接單後自動觸發（dispatch_delivery 內部呼叫）；②後台人員指示 AI 助手「發信通知用戶」時呼叫。",
+        "type": "🔴 寫入", "caller": "後台 AI 助手 / 系統自動觸發",
+        "desc": "透過 SMTP 發送 Email 通知給指定收件人。dispatch_delivery 接單、保險生效確認、課程開課通知均自動觸發；後台 AI 助手也可主動呼叫。需在 .env 設定 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS。",
+        "trigger": "①接單後自動觸發（dispatch_delivery 內部呼叫）；②課程/保險狀態變更時自動發送；③後台人員指示 AI 助手「發信通知用戶」時呼叫。",
     },
     {
         "no": 19, "name": "find_tourist_attractions",
