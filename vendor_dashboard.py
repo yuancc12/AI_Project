@@ -96,9 +96,13 @@ elif _is_gym_only:
     m1.metric("商品總數",       total)
     m2.metric("⚠️ 低庫存(≤30)", low_stock_count)
     m3.metric("⏳ 待處理諮詢",  pending)
-elif _is_insurance or _is_finance:
+elif _is_insurance:
     m1, m2 = st.columns(2)
     m1.metric("⏳ 待處理申請", pending)
+    m2.metric("✅ 已完成",     delivering)
+elif _is_finance:
+    m1, m2 = st.columns(2)
+    m1.metric("⏳ 待處理諮詢", pending)
     m2.metric("✅ 已完成",     delivering)
 else:
     m1, m2, m3, m4, m5 = st.columns(5)
@@ -122,8 +126,13 @@ elif _is_gym_only:
     _tabs = st.tabs(_tab_labels)
     tab1, tab5 = None, None
     tab2, tab3, tab4, tab6 = _tabs
-elif _is_insurance or _is_finance:
+elif _is_insurance:
     _tab_labels = ["📋 保險申請單"]
+    _tabs = st.tabs(_tab_labels)
+    tab2 = _tabs[0]
+    tab1 = tab3 = tab4 = tab5 = tab6 = None
+elif _is_finance:
+    _tab_labels = ["📋 理財諮詢單"]
     _tabs = st.tabs(_tab_labels)
     tab2 = _tabs[0]
     tab1 = tab3 = tab4 = tab5 = tab6 = None
@@ -258,8 +267,15 @@ if tab1 is not None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 with (tab2 if tab2 is not None else _null):
-    st.markdown("#### 用戶透過 AI 助手提交的採買諮詢，在此確認接單或拒絕並派送。")
-    st.caption("派送操作透過 **mcp.Client** 真實呼叫 `dispatch_delivery` MCP 工具。")
+    if _is_insurance:
+        st.markdown("#### 🛡️ 用戶旅遊保險申請單，在此審核、發送保單、確認生效。")
+        st.caption("四步流程：收到申請 → 發送保單給用戶簽名 → 確認用戶簽名 → 確認生效")
+    elif _is_finance:
+        st.markdown("#### 💰 用戶理財諮詢申請單，在此回覆並安排專員聯繫。")
+        st.caption(f"登入帳號：**{st.session_state.get('vendor_store','')}**　｜　顯示 goal 含「理財/投資/股票/基金/證券」的諮詢單")
+    else:
+        st.markdown("#### 用戶透過 AI 助手提交的採買諮詢，在此確認接單或拒絕並派送。")
+        st.caption("派送操作透過 **mcp.Client** 真實呼叫 `dispatch_delivery` MCP 工具。")
 
     _SICON = {"全部": "📋", "待處理": "⏳", "待簽名": "✍️", "待後台確認": "🔍", "配送中": "🚚", "預留中": "📦", "已拒絕": "❌", "已完成": "✅"}
     status_opts = ["全部", "待處理", "待簽名", "待後台確認", "配送中", "預留中", "已拒絕", "已完成"]
@@ -272,7 +288,7 @@ with (tab2 if tab2 is not None else _null):
         horizontal=True, key="inq_status", label_visibility="collapsed",
     )
 
-    inquiries = get_inquiries(sel_status, st.session_state.get("vendor_store"), brand=_brand_v, is_gym=_is_gym_only, is_insurance=(_is_insurance or _is_finance))
+    inquiries = get_inquiries(sel_status, st.session_state.get("vendor_store"), brand=_brand_v, is_gym=_is_gym_only, is_insurance=_is_insurance, is_finance=_is_finance)
     st.caption(f"共 {len(inquiries)} 筆{'（' + sel_status + '）' if sel_status != '全部' else ''}")
     st.divider()
 
@@ -444,7 +460,7 @@ with (tab2 if tab2 is not None else _null):
 
 【除外責任】故意行為、戰爭、核子輻射所致事故不予承保。
 
-統超保險經紀人股份有限公司　客服：0800-555-880"""
+統超保險經紀人股份有限公司"""
                             with st.expander("📄 保單預覽", expanded=True):
                                 st.text(_contract_preview)
                             with st.form(f"ins_send_form_{inq_id}"):
@@ -483,7 +499,7 @@ with (tab2 if tab2 is not None else _null):
                                                 f"請登入「統一生活管家」→「我的訂單」→ 找到此申請單號 → 點擊「✍️ 簽署保單」完成電子簽名。\n\n"
                                                 + (f"保險專員留言：{_extra_note}\n\n" if _extra_note else "")
                                                 + f"保單摘要：\n{_contract_preview}\n\n"
-                                                f"客服電話：0800-555-880\n統超保險經紀人 敬上"
+                                                f"統超保險經紀人 敬上"
                                             ),
                                         )
                                     except Exception:
@@ -506,7 +522,7 @@ with (tab2 if tab2 is not None else _null):
                                 _idb = _db()
                                 _idb.execute(
                                     "UPDATE pms_form_feedback SET status='已拒絕', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
-                                    (f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: {_rj_reason or '申請未通過審核，如有疑問請致電 0800-555-880。'}\n", inq_id),
+                                    (f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: {_rj_reason or '申請未通過審核，如有疑問請聯繫統超保險經紀人。'}\n", inq_id),
                                 )
                                 _idb.commit(); _idb.close()
                                 st.warning(f"申請 {inq_id} 已拒絕。")
@@ -554,7 +570,7 @@ with (tab2 if tab2 is not None else _null):
                                             f"親愛的 {_urow['username']} 您好，\n\n"
                                             f"您的旅遊保險申請（申請單號：{inq_id}）已由統超保險經紀人確認生效。\n\n"
                                             f"保單詳情：\n{inq.get('note','')}\n\n"
-                                            f"如有任何問題，請致電 0800-555-880。\n\n統超保險經紀人 敬上"
+                                            f"如有任何問題，請至「統一生活管家」我的訂單查詢，或聯繫統超保險經紀人。\n\n統超保險經紀人 敬上"
                                         ),
                                     )
                                 except Exception:
@@ -565,7 +581,7 @@ with (tab2 if tab2 is not None else _null):
                             _idb = _db()
                             _idb.execute(
                                 "UPDATE pms_form_feedback SET status='已拒絕', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
-                                (f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: 申請未通過審核，如有疑問請致電 0800-555-880。\n", inq_id),
+                                (f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: 申請未通過審核，如有疑問請聯繫統超保險經紀人。\n", inq_id),
                             )
                             _idb.commit(); _idb.close()
                             st.warning(f"申請 {inq_id} 已拒絕。")

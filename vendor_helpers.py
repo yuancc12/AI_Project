@@ -479,7 +479,7 @@ def update_product(product_id, name, category, protein_g, calories, price, stock
     con.close()
 
 
-def get_inquiries(status_filter=None, store_name=None, brand=None, is_gym=False, is_insurance=False):
+def get_inquiries(status_filter=None, store_name=None, brand=None, is_gym=False, is_insurance=False, is_finance=False):
     con = _db()
     conditions, params = [], []
     if status_filter and status_filter != "全部":
@@ -489,6 +489,8 @@ def get_inquiries(status_filter=None, store_name=None, brand=None, is_gym=False,
         conditions.append("goal LIKE '課程報名：%'")
     elif is_insurance:
         conditions.append("(goal LIKE '%保險%' OR goal LIKE '%旅遊險%' OR goal LIKE '%投保%')")
+    elif is_finance:
+        conditions.append("(goal LIKE '%理財%' OR goal LIKE '%投資%' OR goal LIKE '%股票%' OR goal LIKE '%基金%' OR goal LIKE '%證券%')")
     elif store_name and store_name != "管理員":
         if brand and brand not in ("全部", "健身房"):
             # 顯示：已派給本門市 OR (待處理 AND (含本品牌商品 OR 商品無vendor欄位 OR 清單為空))

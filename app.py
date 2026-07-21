@@ -1509,24 +1509,89 @@ elif st.session_state.stage == "inquiry_form":
             st.caption("由統超保險經紀人提供服務。送出申請後，保險人員將審核並發送正式保單供您電子簽名確認。")
             st.divider()
 
-            st.info("📋 **申請流程：** 送出申請 → 保險人員審核 → 發送正式保單 → 您電子簽名確認 → 保單生效")
+            st.info("📋 **申請流程：** 填寫資料送出 → 保險人員審核 → 發送正式保單 → 您電子簽名確認 → 保單生效")
 
-            ins_name = st.text_input(
-                "👤 申請人姓名 *",
+            # ── 申請人基本資料 ──────────────────────────────────────────────
+            st.markdown("#### 👤 申請人資料")
+            _ins_c1, _ins_c2 = st.columns(2)
+            ins_name = _ins_c1.text_input(
+                "申請人姓名 *",
                 value=prefill.get("contact_name", "") or st.session_state.get("username", ""),
                 key="ins_name",
             )
-            ins_note = st.text_area(
-                "📝 旅遊詳情（目的地、出發日期、天數、人數等）",
-                value=prefill.get("note", ""),
-                placeholder="例：2026/8/1–8/5 澎湖旅遊，共 2 人，希望承保意外與醫療",
-                height=100,
-                key="ins_note",
+            ins_id = _ins_c2.text_input(
+                "身份證字號 *",
+                placeholder="A123456789",
+                key="ins_id",
+            )
+            _ins_c3, _ins_c4 = st.columns(2)
+            ins_birth = _ins_c3.text_input(
+                "出生日期",
+                placeholder="例：1990/01/15",
+                key="ins_birth",
+            )
+            ins_email = _ins_c4.text_input(
+                "聯絡 Email",
+                value=st.session_state.get("user_email", ""),
+                placeholder="example@email.com",
+                key="ins_email",
             )
 
-            can_submit_ins = bool(ins_name.strip())
-            if not can_submit_ins:
-                st.warning("⚠️ 請填寫申請人姓名後再送出。")
+            st.divider()
+            # ── 旅遊行程資料 ──────────────────────────────────────────────
+            st.markdown("#### ✈️ 旅遊行程資料")
+            ins_dest = st.text_input(
+                "旅遊目的地 *",
+                value="",
+                placeholder="例：澎湖、日本東京、泰國曼谷",
+                key="ins_dest",
+            )
+            _ins_d1, _ins_d2, _ins_d3 = st.columns(3)
+            ins_start = _ins_d1.date_input(
+                "投保開始日（出發日）*",
+                value=None,
+                min_value=date.today(),
+                key="ins_start",
+                format="YYYY/MM/DD",
+            )
+            ins_end = _ins_d2.date_input(
+                "投保結束日（返回日）*",
+                value=None,
+                min_value=date.today(),
+                key="ins_end",
+                format="YYYY/MM/DD",
+            )
+            ins_persons = _ins_d3.number_input(
+                "投保人數 *",
+                min_value=1,
+                max_value=20,
+                value=1,
+                key="ins_persons",
+            )
+
+            st.divider()
+            # ── 特殊需求 ──────────────────────────────────────────────────
+            st.markdown("#### 📝 其他資訊")
+            ins_activities = st.multiselect(
+                "是否參與高風險活動（可複選）",
+                ["浮潛 / 水上活動", "攀岩 / 高空活動", "滑雪 / 單板滑雪", "租車自駕", "機車騎乘", "潛水"],
+                key="ins_activities",
+            )
+            ins_note_extra = st.text_area(
+                "備註（醫療史、特殊需求等）",
+                value="",
+                placeholder="例：投保人有高血壓病史｜需要緊急醫療運送保障",
+                height=80,
+                key="ins_note_extra",
+            )
+
+            # ── 驗證 ──────────────────────────────────────────────────────
+            _date_ok = (ins_start and ins_end and ins_start <= ins_end) if (ins_start and ins_end) else False
+            can_submit_ins = bool(ins_name.strip() and ins_id.strip() and ins_dest.strip() and ins_start and ins_end and _date_ok)
+            if ins_start and ins_end and not _date_ok:
+                st.warning("⚠️ 返回日不得早於出發日。")
+            elif not can_submit_ins:
+                st.warning("⚠️ 請填寫所有必填欄位（*）後再送出。")
 
             if st.button(
                 "📋 送出保險申請",
@@ -1535,14 +1600,23 @@ elif st.session_state.stage == "inquiry_form":
                 use_container_width=True,
                 key="ins_submit",
             ):
+                _days = (ins_end - ins_start).days + 1 if ins_start and ins_end else 0
+                _acts_str = "、".join(ins_activities) if ins_activities else "無"
+                _ins_note = (
+                    f"目的地：{ins_dest}｜"
+                    f"出發日：{ins_start}｜返回日：{ins_end}｜天數：{_days}天｜"
+                    f"投保人數：{ins_persons}人｜"
+                    f"高風險活動：{_acts_str}"
+                    + (f"｜備註：{ins_note_extra}" if ins_note_extra else "")
+                )
                 with st.spinner("📡 建立保險申請中..."):
                     _ins_params = {
                         "goal":          "旅遊保險申請",
                         "contact_name":  ins_name.strip(),
                         "contact_phone": "",
                         "budget":        0,
-                        "keyword":       "",
-                        "note":          ins_note or prefill.get("note", ""),
+                        "keyword":       ins_id.strip(),
+                        "note":          _ins_note,
                         "address":       "",
                         "products_json": "",
                         "user_id":       st.session_state.get("user_id") or 0,
@@ -1942,7 +2016,6 @@ elif st.session_state.stage == "insurance_sign":
 
 【第四條 理賠申請】
 發生保險事故後，請於事故發生後 30 日內聯繫本公司：
-  ・客服電話：0800-555-880（24 小時服務）
   ・Email：claim@unisuperins.com.tw
   ・需檢附：理賠申請書、醫療費用收據、事故證明文件
 
@@ -1963,7 +2036,6 @@ elif st.session_state.stage == "insurance_sign":
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 統超保險經紀人股份有限公司
 統一編號：12345678
-客服電話：0800-555-880
 官方網站：www.unisuperins.com.tw
 """
     with st.container(border=True):
