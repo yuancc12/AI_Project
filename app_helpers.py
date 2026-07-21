@@ -354,12 +354,16 @@ CLAUDE_TOOLS = [
             "在統一集團各業務（7-11、萬家福、康是美、統一生機）搜尋健康商品。"
             "當用戶詢問特定商品在哪裡可以買到，或想瀏覽某類商品時使用。\n"
             "【CRITICAL】keyword **只接受單一商品關鍵字**，禁止用逗號、頓號分隔多個商品名稱。"
-            "需查多個商品請分次呼叫，每次傳一個關鍵字。"
+            "需查多個商品請分次呼叫，每次傳一個關鍵字。\n"
+            "【vendor 規則】用戶說「7-11」「7-ELEVEN」「便利商店」→ vendor=\"7-ELEVEN\"；"
+            "「萬家福」→ vendor=\"萬家福\"；「康是美」→ vendor=\"康是美\"；"
+            "「統一生機」→ vendor=\"統一生機\"；未指定通路則省略 vendor。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "keyword": {"type": "string", "description": "單一商品關鍵字，如：雞胸肉（禁止傳入「雞胸肉,豆腐」等多個）"},
+                "vendor":  {"type": "string", "description": "限定通路（選填）：7-ELEVEN / 萬家福 / 康是美 / 統一生機；留空=全統一集團"},
             },
             "required": ["keyword"],
         },
@@ -742,6 +746,7 @@ SYSTEM_PROMPT = """\
 | 問游泳池、體育館、運動中心、公共運動場館 | `find_sports_venues(keyword, county_code)` — 公共場館資訊 |
 | 問附近門市/餐廳/咖啡廳/商業健身房等地點 | `find_nearby_stores(name, category)` — AI 自行判斷帶入 |
 | 問天氣、要不要出門 | `get_weather()`，系統自動注入 GPS |
+| 今天想運動 / 想去運動 / 要去健身 | **先呼叫 `get_weather()`，再依天氣推薦**（見下方運動情境規則） |
 | 模糊瀏覽「有什麼商品」 | `search_grocery("")` |
 | 問景點/旅遊/出遊去哪 | `find_tourist_attractions(keyword, county, category)` — 搜尋 TDX 觀光資料 |
 
@@ -784,11 +789,10 @@ SYSTEM_PROMPT = """\
 
 ## 食譜搜尋後的流程（CRITICAL）
 1. 呼叫 `search_recipe` 展示食譜內容（食材、步驟、時間）
-2. 立即詢問用戶：「需要我幫您找食譜中用到的食材在哪裡可以購買嗎？」
-3. 用戶說「是」「好」「需要」後，從食譜的食材中挑選關鍵食材
-4. 逐一呼叫 `search_grocery(keyword)` 搜尋統一集團商品（每次一個關鍵字）
-5. 整理結果：「以下是您可以在統一集團門市購買的食材：...」
-6. 若用戶有興趣購買，繼續引導建立諮詢單
+2. **立即**從食譜食材中挑選 3–5 個關鍵食材，逐一呼叫 `search_grocery(keyword)`（每次一個關鍵字），不需再詢問用戶
+3. 只整理並呈現 **有找到商品（count > 0）** 的結果：「以下是您可以在統一集團門市購買的食材：...」
+4. **search_grocery 回傳 count=0 時，靜默略過，不向用戶提及該食材找不到**
+5. 若用戶有興趣購買，繼續引導建立諮詢單
 
 ## 何時建立諮詢單
 - 任何用戶有**後續跟進需要**的服務（不限採買）
@@ -808,6 +812,16 @@ SYSTEM_PROMPT = """\
 5. 用戶說「是」「好」「確認」「ok」後，立即呼叫 submit_inquiry 工具（帶入 delivery_type、address 或 pickup_store）
 6. 絕對不能只用文字說「已建立」，必須真正呼叫工具才算完成
 7. 未獲明確同意，絕對不能呼叫 submit_inquiry
+
+## 運動情境規則（CRITICAL）
+當用戶說「今天想運動」「要去運動」「想健身」「要去跑步」等，執行以下流程：
+1. **先呼叫 `get_weather()`** 取得當前天氣
+2. 根據天氣狀況判斷：
+   - **☀️ 晴天 / 多雲（無雨）**：建議戶外運動，呼叫 `find_sports_venues(keyword="運動")` 或 `find_nearby_stores(name="", category="sports_centre")` 推薦附近戶外/室外場館
+   - **🌧️ 下雨 / 雷陣雨 / 大雨**：建議室內運動，**優先呼叫 `get_gym_courses()`** 推薦 Being Sport 課程，再呼叫 `find_sports_venues(keyword="健身")` 找室內場館
+   - **🌫️ 高溫（≥35°C）/ 空品差**：建議室內，理由同雨天
+3. 給出具體建議：「今天天氣 XX，推薦您 [室內/戶外] 運動，以下是附近場館/課程...」
+4. 詢問是否需要報名課程或建立諮詢單
 
 ## 語言
 繁體中文，語氣親切自然，適當使用 emoji\

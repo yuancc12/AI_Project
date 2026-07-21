@@ -210,6 +210,15 @@ def _build_system() -> str:
             f"由你根據用戶意圖決定 name（品牌名）與 category（OSM 類型），lat/lng 系統自動注入。\n"
             f"例：7-11 → name=\"7-ELEVEN\" category=\"convenience\"；餐廳 → name=\"\" category=\"restaurant\""
         )
+    else:
+        manual_city = st.session_state.get("manual_city", "")
+        if manual_city:
+            system += (
+                f"\n\n## 用戶目前位置（手動設定）\n"
+                f"城市：{manual_city}\n"
+                f"無 GPS 座標，呼叫 get_weather 時傳入 city=\"{manual_city}\"；"
+                f"呼叫 find_nearby_stores 時帶入 name/category，系統會嘗試以城市名稱定位。"
+            )
     return system
 
 
@@ -309,11 +318,20 @@ def chat_with_claude(claude_msgs: list, api_key: str):
                     msgs.pop()
                 return text or "（為您開啟報名確認表單 📋）", log, msgs
 
-            result_str  = TOOL_FNS[b.name](**b.input)
+            tool_input = dict(b.input)
+            # 自動注入 GPS（Claude 有時不帶 lat/lng）
+            _GPS_TOOLS_C = {"find_nearby_stores", "get_weather", "find_sports_venues"}
+            if b.name in _GPS_TOOLS_C and not tool_input.get("lat"):
+                _lat = st.session_state.get("user_lat")
+                _lng = st.session_state.get("user_lng")
+                if _lat:
+                    tool_input["lat"] = _lat
+                    tool_input["lng"] = _lng
+            result_str  = TOOL_FNS[b.name](**tool_input)
             result_dict = json.loads(result_str)
             log.append({
                 "tool":   b.name,
-                "params": b.input,
+                "params": tool_input,
                 "result": result_dict,
                 "ts":     datetime.now().strftime("%H:%M:%S"),
                 "via":    "direct import",
@@ -477,19 +495,21 @@ async def _ollama_mcp_loop(msgs: list, prefetch_cache: dict | None = None,
 
 
                 # 自動補 GPS（Ollama 常忘記帶 lat/lng；用傳入的參數而非 st.session_state）
-                if tool_name == "find_nearby_stores" and not tool_args.get("lat"):
+                _GPS_TOOLS = {"find_nearby_stores", "get_weather", "find_sports_venues"}
+                if tool_name in _GPS_TOOLS and not tool_args.get("lat"):
                     if user_lat:
                         tool_args["lat"] = user_lat
                         tool_args["lng"] = user_lng
-                        print(f"📍 [MCP] 自動注入 GPS {user_lat:.5f},{user_lng:.5f}")
-                    else:
-                        # 沒有 GPS → 不呼叫 MCP（避免 pydantic 驗證失敗），直接回錯誤
+                        print(f"📍 [MCP] 自動注入 GPS → {tool_name} {user_lat:.5f},{user_lng:.5f}")
+                    elif tool_name == "find_nearby_stores":
+                        # find_nearby_stores 沒有 GPS 就無法運作，直接回錯誤
                         no_gps = json.dumps({"message": "⚠️ 尚未取得 GPS。請在側欄展開「📍 我的位置」並允許瀏覽器取得位置。"}, ensure_ascii=False)
                         resolved_counts[tool_name] = resolved_counts.get(tool_name, 0) + 1
                         tool_log.append({"tool": tool_name, "params": tool_args,
                                          "result": json.loads(no_gps), "ts": ts, "via": "mcp.Client"})
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": no_gps})
                         continue
+                    # get_weather / find_sports_venues 沒 GPS 時帶 city 繼續（工具自己地理編碼）
 
                 # 同輪單次型工具：呼叫過一次即攔截，直接回上次結果（不管有無店家）
                 if tool_name in _ONCE_PER_TURN and resolved_counts.get(tool_name, 0) > 0:
@@ -1195,16 +1215,26 @@ with st.sidebar:
                 st.rerun()
         else:
             if not _HAS_GEO:
-                st.warning("請安裝 streamlit-js-eval 以啟用位置功能")
-                st.code("uv pip install streamlit-js-eval")
+                st.warning("⚠️ GPS 不可用（未安裝 streamlit-js-eval）")
             elif st.session_state.get("_geo_error") == 1:
-                st.error("位置授權遭拒，請在瀏覽器設定中允許此頁面存取位置，再重新偵測。")
+                st.error("位置授權遭拒，請在瀏覽器設定中允許存取位置。")
                 if st.button("🔄 重新偵測", key="geo_retry", use_container_width=True):
                     st.session_state.pop("_geo_error", None)
                     st.session_state["_geo_refresh_count"] = st.session_state.get("_geo_refresh_count", 0) + 1
                     st.rerun()
             else:
                 st.info("正在取得位置…請允許瀏覽器的授權請求")
+                st.caption("手機用戶：若持續無法取得，請改用下方手動輸入。")
+            # 手動城市輸入（手機 HTTP 下瀏覽器封鎖 GPS 時的備案）
+            _manual = st.text_input(
+                "或手動輸入城市",
+                value=st.session_state.get("manual_city", ""),
+                placeholder="例：台北市、高雄市、台中市",
+                key="manual_city_input",
+            )
+            if st.button("✅ 設定城市", key="set_manual_city", use_container_width=True):
+                st.session_state["manual_city"] = _manual.strip()
+                st.rerun()
 
     st.divider()
 
@@ -1264,8 +1294,7 @@ with st.sidebar:
                     st.caption(f"路徑：{via_badge}")
                     params_str = "  ".join(f"{k}={v}" for k, v in entry["params"].items())
                     st.code(params_str, language=None)
-                    with st.expander("JSON"):
-                        st.json(entry["result"])
+                    st.json(entry["result"], expanded=False)
             if st.button("清除", use_container_width=True, key="clear_mcp"):
                 st.session_state.mcp_log = []; st.rerun()
 
@@ -1504,6 +1533,58 @@ elif st.session_state.stage == "inquiry_form":
         _is_ins_form = "保險" in _goal_val or "旅遊險" in _goal_val
 
         if _is_ins_form:
+            # ── 從對話 note 解析預填值 ──────────────────────────────────────
+            def _parse_ins_note(note: str) -> dict:
+                """從 AI 彙整的 note 字串解析保險表單預填值。
+                格式範例：目的地：日本東京｜出發日：2026-08-01｜返回日：2026-08-05｜投保人數：2人｜備註：XX
+                或：目的地：XX｜日期：2026-08-01~2026-08-05｜人數：2人
+                """
+                import re as _re
+                parsed = {}
+                if not note:
+                    return parsed
+                for seg in note.split("｜"):
+                    seg = seg.strip()
+                    if "：" not in seg:
+                        continue
+                    k, v = seg.split("：", 1)
+                    k, v = k.strip(), v.strip()
+                    if "目的地" in k:
+                        parsed["destination"] = v
+                    elif "出發日" in k or ("日期" in k and "~" in v):
+                        if "~" in v:
+                            parts_d = v.split("~")
+                            parsed["start_str"] = parts_d[0].strip()
+                            if len(parts_d) > 1:
+                                parsed["end_str"] = parts_d[1].strip()
+                        else:
+                            parsed["start_str"] = v
+                    elif "返回日" in k or "回程日" in k:
+                        parsed["end_str"] = v
+                    elif "人數" in k:
+                        m = _re.search(r'\d+', v)
+                        if m:
+                            parsed["persons"] = int(m.group())
+                    elif "備註" in k:
+                        parsed["extra_note"] = v
+                return parsed
+
+            def _try_parse_date(s: str):
+                """嘗試將字串解析為 date 物件，失敗回傳 None。"""
+                for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y年%m月%d日"):
+                    try:
+                        return datetime.strptime(s, fmt).date()
+                    except Exception:
+                        pass
+                return None
+
+            _ins_parsed   = _parse_ins_note(prefill.get("note", ""))
+            _ins_dest_val = _ins_parsed.get("destination", "")
+            _ins_persons_val = int(_ins_parsed.get("persons", 1))
+            _ins_start_val = _try_parse_date(_ins_parsed.get("start_str", ""))
+            _ins_end_val   = _try_parse_date(_ins_parsed.get("end_str", ""))
+            _ins_extra_val = _ins_parsed.get("extra_note", "")
+
             # ── 旅遊保險申請表單（第一步：送出申請，不含簽名）────────────────
             col_title.markdown("## 🛡️ 旅遊保險申請表")
             st.caption("由統超保險經紀人提供服務。送出申請後，保險人員將審核並發送正式保單供您電子簽名確認。")
@@ -1542,21 +1623,21 @@ elif st.session_state.stage == "inquiry_form":
             st.markdown("#### ✈️ 旅遊行程資料")
             ins_dest = st.text_input(
                 "旅遊目的地 *",
-                value="",
+                value=_ins_dest_val,
                 placeholder="例：澎湖、日本東京、泰國曼谷",
                 key="ins_dest",
             )
             _ins_d1, _ins_d2, _ins_d3 = st.columns(3)
             ins_start = _ins_d1.date_input(
                 "投保開始日（出發日）*",
-                value=None,
+                value=_ins_start_val,
                 min_value=date.today(),
                 key="ins_start",
                 format="YYYY/MM/DD",
             )
             ins_end = _ins_d2.date_input(
                 "投保結束日（返回日）*",
-                value=None,
+                value=_ins_end_val,
                 min_value=date.today(),
                 key="ins_end",
                 format="YYYY/MM/DD",
@@ -1565,7 +1646,7 @@ elif st.session_state.stage == "inquiry_form":
                 "投保人數 *",
                 min_value=1,
                 max_value=20,
-                value=1,
+                value=_ins_persons_val,
                 key="ins_persons",
             )
 
@@ -1579,7 +1660,7 @@ elif st.session_state.stage == "inquiry_form":
             )
             ins_note_extra = st.text_area(
                 "備註（醫療史、特殊需求等）",
-                value="",
+                value=_ins_extra_val,
                 placeholder="例：投保人有高血壓病史｜需要緊急醫療運送保障",
                 height=80,
                 key="ins_note_extra",
