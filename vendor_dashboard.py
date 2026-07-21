@@ -278,7 +278,12 @@ with (tab2 if tab2 is not None else _null):
         st.caption("派送操作透過 **mcp.Client** 真實呼叫 `dispatch_delivery` MCP 工具。")
 
     _SICON = {"全部": "📋", "待處理": "⏳", "待簽名": "✍️", "待後台確認": "🔍", "配送中": "🚚", "預留中": "📦", "已拒絕": "❌", "已完成": "✅"}
-    status_opts = ["全部", "待處理", "待簽名", "待後台確認", "配送中", "預留中", "已拒絕", "已完成"]
+    if _is_insurance:
+        status_opts = ["全部", "待處理", "待簽名", "待後台確認", "已拒絕", "已完成"]
+    elif _is_finance or _is_gym_only:
+        status_opts = ["全部", "待處理", "已拒絕", "已完成"]
+    else:
+        status_opts = ["全部", "待處理", "配送中", "預留中", "已拒絕", "已完成"]
     _rf_col, _sel_col = st.columns([1, 8])
     if _rf_col.button("🔄", key="inq_refresh", help="重新整理"):
         st.rerun()
@@ -305,8 +310,18 @@ with (tab2 if tab2 is not None else _null):
             # 卡片間距
             st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
 
+            _is_service_inq = _is_ins_inq or (_is_gym_only and inq.get("goal","").startswith("課程報名")) or _is_finance
             _dtype = inq.get("delivery_type") or "外送"
             _dtcfg = DELIVERY_TYPE_CFG.get(_dtype, DELIVERY_TYPE_CFG["外送"])
+            _dtype_badge = (
+                ""
+                if _is_service_inq
+                else (
+                    f'<span style="background:{_dtcfg["color"]};color:white;border-radius:10px;'
+                    f'padding:2px 8px;font-size:0.78rem;font-weight:700;white-space:nowrap">'
+                    f'{_dtcfg["icon"]} {_dtcfg["label"]}</span>'
+                )
+            )
 
             with st.container(border=True):
                 # ── 卡片 Header：顏色條 + 狀態標籤 + 單號 + 時間 ────────────
@@ -317,9 +332,7 @@ with (tab2 if tab2 is not None else _null):
                     f'<span style="background:{s_color};color:white;border-radius:12px;'
                     f'padding:3px 10px;font-size:0.82rem;font-weight:700;white-space:nowrap">'
                     f'{s_icon} {status}</span>'
-                    f'<span style="background:{_dtcfg["color"]};color:white;border-radius:10px;'
-                    f'padding:2px 8px;font-size:0.78rem;font-weight:700;white-space:nowrap">'
-                    f'{_dtcfg["icon"]} {_dtcfg["label"]}</span>'
+                    f'{_dtype_badge}'
                     f'<span style="font-weight:700;font-family:monospace;font-size:0.9rem">{inq_id}</span>'
                     f'<span style="margin-left:auto;color:#888;font-size:0.78rem">'
                     f'{str(inq.get("created_at",""))[:16]}</span>'
@@ -327,14 +340,15 @@ with (tab2 if tab2 is not None else _null):
                     unsafe_allow_html=True,
                 )
 
-                # ── 第二行：地址資訊 ─────────────────────────────────────────
-                _addr = inq.get("address", "")
-                _pickup = inq.get("pickup_store", "")
-                if _dtype == "外送" and _addr:
-                    st.info(f"🚚 **外送地址：** {_addr}")
-                elif _dtype == "自取":
-                    _pickup_txt = f"偏好門市：**{_pickup}**" if _pickup else "門市未指定"
-                    st.success(f"🏃 **自取** — {_pickup_txt}")
+                # ── 第二行：地址資訊（服務類諮詢單不顯示）─────────────────
+                if not _is_service_inq:
+                    _addr = inq.get("address", "")
+                    _pickup = inq.get("pickup_store", "")
+                    if _dtype == "外送" and _addr:
+                        st.info(f"🚚 **外送地址：** {_addr}")
+                    elif _dtype == "自取":
+                        _pickup_txt = f"偏好門市：**{_pickup}**" if _pickup else "門市未指定"
+                        st.success(f"🏃 **自取** — {_pickup_txt}")
 
                 # ── 第三行：目標 ｜ 聯絡人 ｜ 預算 ─────────────────────────
                 d1, d2, d3 = st.columns(3)
@@ -342,7 +356,9 @@ with (tab2 if tab2 is not None else _null):
                     st.markdown("**🎯 目標**")
                     st.markdown(inq.get("goal") or "—")
                     _kw_disp = inq.get("keyword", "")
-                    if _kw_disp and not _kw_disp.isdigit():
+                    if _is_ins_inq and _kw_disp:
+                        st.caption(f"身份證字號：{_kw_disp}")
+                    elif _kw_disp and not _kw_disp.isdigit():
                         st.caption(f"關鍵字：{_kw_disp}")
                     if inq.get("note"):
                         st.caption(f"備註：{inq['note']}")
