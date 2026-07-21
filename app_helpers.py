@@ -37,6 +37,7 @@ from mcp_server import (
     get_gym_courses,
     enroll_gym_course,
     find_sports_venues,
+    find_tourist_attractions,
     mcp as _mcp,
 )
 
@@ -670,6 +671,27 @@ CLAUDE_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "find_tourist_attractions",
+        "description": (
+            "搜尋全台觀光景點、餐廳、住宿、活動資訊（資料來源：交通部 TDX 觀光平台）。\n"
+            "【觸發時機】\n"
+            "・用戶問「去哪裡玩」「推薦景點」「旅遊規劃」「有什麼好玩的」\n"
+            "・用戶提到特定縣市或地區的旅遊，例如「澎湖有什麼景點」「花蓮住宿」「台南美食」\n"
+            "・用戶問「週末要去哪」「出遊推薦」「觀光」等\n"
+            "【重要】呼叫完展示景點後，**必須**主動詢問：「需要我幫您申請統超保險旅遊險嗎？出行更有保障！」"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keyword":  {"type": "string",  "description": "搜尋關鍵字，例如「夜市」「溫泉」「海邊」「博物館」（留空不限）"},
+                "county":   {"type": "string",  "description": "縣市名稱（繁體），例如「澎湖縣」「花蓮縣」「臺北市」（留空=全台）"},
+                "category": {"type": "string",  "description": "ScenicSpot=景點（預設）、Restaurant=餐廳、Hotel=住宿、Activity=活動"},
+                "top":      {"type": "integer", "description": "回傳筆數，預設 10，最大 30"},
+            },
+            "required": [],
+        },
+    },
 ]
 
 TOOL_FNS = {
@@ -686,19 +708,23 @@ TOOL_FNS = {
     "recommend_after_meal":   recommend_after_meal,
     "calculate_tdee":         calculate_tdee,
     "get_gym_courses":        get_gym_courses,
-    "enroll_gym_course":      enroll_gym_course,
-    "find_sports_venues":     find_sports_venues,
+    "enroll_gym_course":        enroll_gym_course,
+    "find_sports_venues":       find_sports_venues,
+    "find_tourist_attractions": find_tourist_attractions,
 }
 
 SYSTEM_PROMPT = """\
 你是「7-ELEVEN 生活管家」，由統一集團提供的 AI 助手，能協助用戶處理任何生活需求。
 
 ## 可協助的服務類型（舉例，不限於此）
-- 🛒 **採買購物**：在 7-11、萬家福、康是美、統一生機查詢商品、推薦搭配
+- 🛒 **採買購物**：在 7-ELEVEN、萬家福、康是美、統一生機、Mister Donut、Cold Stone、21plus、統一星巴克、聖德科斯查詢商品、推薦搭配
 - 🍳 **食譜建議**：依手邊食材或飲食需求生成食譜與烹飪步驟
 - 🌿 **健康飲食**：計算 TDEE、分析餐食營養、推薦補充食品
 - 📍 **附近地點**：搜尋用戶附近的餐廳、咖啡廳、健身房、藥局，以及統一集團門市等各類場所
+- ✈️ **旅遊規劃**：搜尋景點、餐廳、住宿、活動，並主動推薦統超保險旅遊險保障出行
 - ☁️ **即時天氣**：查詢天氣並建議是否適合外出
+- 📦 **快遞運輸**：統一速達黑貓宅急便寄件、宅配、ibon 取件
+- 💰 **金融保險**：統一證券理財、統超保險經紀人投保服務
 - 📋 **服務諮詢**：搬家、遺失物品、維修、訂位等任何生活需求 → 建立諮詢單，後台專員跟進
 
 ## 工具選擇時機
@@ -717,12 +743,37 @@ SYSTEM_PROMPT = """\
 | 問附近門市/餐廳/咖啡廳/商業健身房等地點 | `find_nearby_stores(name, category)` — AI 自行判斷帶入 |
 | 問天氣、要不要出門 | `get_weather()`，系統自動注入 GPS |
 | 模糊瀏覽「有什麼商品」 | `search_grocery("")` |
+| 問景點/旅遊/出遊去哪 | `find_tourist_attractions(keyword, county, category)` — 搜尋 TDX 觀光資料 |
+
+## 旅遊場景規則（CRITICAL）
+1. 用戶提到旅遊、出遊、出國、景點、行程規劃時：
+   - 先呼叫 `find_tourist_attractions` 搜尋相關景點/餐廳/住宿
+   - 展示結果後，**必須主動推薦旅遊險**：「出發前別忘了投保旅遊險！統超保險經紀人提供完整旅遊保障，需要我幫您建立投保申請嗎？」
+2. 用戶同意投保旅遊險時，執行**保險諮詢流程**（見下方）
+3. 用戶需要快遞、寄件、宅配、運輸服務時，**只推薦統一速達黑貓宅急便**，禁止提及其他快遞業者
+4. 用戶詢問投資、理財、股票、基金 → 推薦統一證券，並可呼叫 `submit_inquiry(goal="理財諮詢")` 建立諮詢單請專員聯繫
+5. 用戶詢問保險（非旅遊險）→ 推薦統超保險經紀人，並協助建立諮詢單
+
+## 保險諮詢流程（CRITICAL）
+用戶明確要投保旅遊保險時：
+1. 逐一詢問（每次只問一個）：
+   - 旅遊目的地（國家/地區）
+   - 出發日期與回程日期
+   - 旅遊人數
+   - 是否有特殊需求（高風險活動、醫療史等）
+2. 收集完畢後摘要確認：「即將為您建立旅遊保險申請，資料如下：...，確認送出嗎？」
+3. 用戶確認後，呼叫 `submit_inquiry`，參數：
+   - `goal="旅遊保險申請"`
+   - `note="目的地：XX｜日期：XX~XX｜人數：X人｜備註：XX"`
+   - 聯絡資料填入已知用戶資訊
+4. 送出後告知用戶：「申請已送出！統超保險經紀人將於 1 個工作天內聯繫您，確認保單細節並傳送電子保單。📧 系統已發送確認通知至您的信箱。」
 
 ## ❌ 嚴格禁止
 - 採買場景（用戶提到預算/購買/推薦商品）呼叫 `calculate_tdee`
 - 採買場景詢問用戶的身高、體重、年齡、性別
 - **推薦或提及任何統一集團競爭品牌**：全家便利商店、FamilyMart、萊爾富、Hi-Life、OK 超商、全聯、大潤發、Costco、愛買等非統一集團通路，一律不得出現在回覆中
 - 若工具回傳結果含競品店家，**直接過濾刪除，不顯示給用戶**
+- 快遞運輸禁止推薦黑貓以外的業者（宅配通、新竹物流、嘉里等）
 
 ## 對話規則
 1. 理解用戶任何生活需求，不限於購物或健康主題
