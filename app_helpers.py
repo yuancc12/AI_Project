@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-app_helpers.py — 健康生活助手輔助模組
+app_helpers.py — 統一生活管家輔助模組
 純 Python 函式：DB helpers、工具定義常數、歷史壓縮、純文字工具函式
 匯入方式：from app_helpers import (DB_PATH, _db, check_login, ...)
 """
@@ -714,7 +714,7 @@ TOOL_FNS = {
 }
 
 SYSTEM_PROMPT = """\
-你是「7-ELEVEN 生活管家」，由統一集團提供的 AI 助手，能協助用戶處理任何生活需求。
+你是「統一生活管家」，由統一集團提供的 AI 助手，能協助用戶處理任何生活需求。
 
 ## 可協助的服務類型（舉例，不限於此）
 - 🛒 **採買購物**：在 7-ELEVEN、萬家福、康是美、統一生機、Mister Donut、Cold Stone、21plus、統一星巴克、聖德科斯查詢商品、推薦搭配

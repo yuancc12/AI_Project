@@ -13,7 +13,7 @@ _null = contextlib.nullcontext()
 from vendor_helpers import (
     DB, VENDOR_COLOR, CAT_ICON, STATUS_CFG, DELIVERY_TYPE_CFG,
     DELIVERY_COMPANIES, DELIVERY_ICON, MCP_TOOLS,
-    _db, get_stats, get_products, update_stock,
+    _db, get_stats, get_products, update_stock, insert_product, delete_product,
     get_inquiries, reject_inquiry, reserve_inquiry,
     get_brand_stores, get_dispatches, get_active_deliveries, update_delivery_status,
     update_product,
@@ -56,13 +56,33 @@ if not st.session_state.vendor_id:
             else:
                 st.error("帳號或密碼錯誤，請再試一次。")
         st.divider()
-        st.caption("測試帳號：7-11-A / vendor123　｜　wanjiafu / vendor123　｜　beingsport / gym123　｜　admin / admin123")
+        st.markdown("""
+**測試帳號一覽**
+
+| 帳號 | 密碼 | 身份 | 可見內容 |
+|------|------|------|---------|
+| `7-11-A` | `vendor123` | 7-11 A門市 | 商品庫存、採買諮詢、AI派送 |
+| `7-11-B` | `vendor123` | 7-11 B門市 | 商品庫存、採買諮詢、AI派送 |
+| `wanjiafu` | `vendor123` | 萬家福信義店 | 商品庫存、採買諮詢、AI派送 |
+| `cosmed` | `vendor123` | 康是美中山店 | 商品庫存、採買諮詢、AI派送 |
+| `misterdonut` | `vendor123` | Mister Donut 大安店 | 商品庫存、採買諮詢、AI派送 |
+| `coldstone` | `vendor123` | Cold Stone 信義店 | 商品庫存、採買諮詢、AI派送 |
+| `21plus` | `vendor123` | 21plus 信義旗艦店 | 商品庫存、採買諮詢、AI派送 |
+| `starbucks` | `vendor123` | 統一星巴克 信義店 | 商品庫存、採買諮詢、AI派送 |
+| `sanitas` | `vendor123` | 聖德科斯 中山店 | 商品庫存、採買諮詢、AI派送 |
+| `beingsport` | `gym123` | Being Sport 健身中心 | 課程報名單、課程管理 |
+| `insurance` | `ins123` | 統超保險經紀人 | 旅遊保險申請單（審核→發保單→確認生效） |
+| `unisec` | `sec123` | 統一證券 | 理財諮詢單 |
+| `driver1` | `driver123` | 外送員 小明 | 外送派件（接單/配送/完成） |
+| `driver2` | `driver123` | 外送員 小華 | 外送派件（接單/配送/完成） |
+| `admin` | `admin123` | 管理員 | 全部（商品/諮詢/AI/派件/課程） |
+""")
     st.stop()
 
 # ── 標題 + 登出 ──────────────────────────────────────────────────────────────
 
 _col_ttl, _col_usr, _col_out = st.columns([4, 2, 1])
-_col_ttl.title("🏪 健康生活助手 — 後台管理")
+_col_ttl.title("🏪 統一生活管家 — 後台管理")
 _col_usr.markdown(
     f'<div style="padding-top:14px;color:#555">👤 <strong>{st.session_state.vendor_store}</strong></div>',
     unsafe_allow_html=True,
@@ -151,115 +171,167 @@ else:
 # TAB 1 — 商品庫存
 # ══════════════════════════════════════════════════════════════════════════════
 
-_RETAIL_BRANDS = ["7-11", "萬家福", "康是美", "統一生機"]
+_RETAIL_BRANDS = [
+    "7-11", "萬家福", "康是美", "統一生機",
+    "Mister Donut", "Cold Stone", "21plus", "統一星巴克", "聖德科斯",
+]
+
+_ADD_CAT_OPTS = ["蛋白質", "主食", "蔬果", "乳製品", "保健品", "即食",
+                 "甜食", "甜點", "飲料", "咖啡", "酒類", "有機食品"]
+
+@st.dialog("➕ 新增商品")
+def _dialog_add_product(default_vendor, is_admin):
+    if is_admin:
+        ap_vendor = st.selectbox("通路 *", _RETAIL_BRANDS)
+    else:
+        ap_vendor = default_vendor
+        st.markdown(
+            f'<span style="background:{VENDOR_COLOR.get(default_vendor,"#888")};color:white;'
+            f'border-radius:6px;padding:3px 10px;font-weight:600">通路：{default_vendor}</span>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("")
+    c1, c2 = st.columns(2)
+    ap_name = c1.text_input("商品名稱 *", placeholder="例：台灣啤酒(330ml)")
+    ap_cat  = c2.selectbox("分類 *", _ADD_CAT_OPTS)
+    c3, c4, c5, c6 = st.columns(4)
+    ap_price    = c3.number_input("售價 ($)",     min_value=0,   max_value=99999, value=50)
+    ap_stock    = c4.number_input("庫存數量",      min_value=0,   max_value=99999, value=50)
+    ap_protein  = c5.number_input("蛋白質 (g)",   min_value=0.0, max_value=999.0, value=0.0, step=0.1, format="%.1f")
+    ap_calories = c6.number_input("熱量 (kcal)",  min_value=0,   max_value=9999,  value=100)
+    st.markdown("")
+    if st.button("✅ 確定新增", type="primary", use_container_width=True):
+        if not ap_name.strip():
+            st.warning("請輸入商品名稱。")
+        else:
+            insert_product(ap_name.strip(), ap_vendor, ap_cat, ap_protein, ap_calories, ap_price, ap_stock)
+            st.success(f"已新增「{ap_name.strip()}」")
+            st.rerun()
 
 if tab1 is not None:
     with tab1:
         _brand = st.session_state.vendor_brand
         _is_admin = (_brand == "全部")
-        _is_retail = _brand in _RETAIL_BRANDS or _is_admin
 
-        if not _is_retail:
-            st.info("🏋️ 健身房帳號請至「Being Sport 課程管理」頁籤操作課程與報名事宜。")
-        else:
-            with st.expander("📊 各通路商品數量"):
-                _show_vendors = _RETAIL_BRANDS if _is_admin else [_brand]
-                cols = st.columns(len(_show_vendors))
-                con = _db()
-                for i, vendor in enumerate(_show_vendors):
-                    n = con.execute(
-                        "SELECT COUNT(*) FROM fitness_product WHERE vendor=?", (vendor,)
-                    ).fetchone()[0]
-                    color = VENDOR_COLOR.get(vendor, "#888")
-                    cols[i].markdown(
-                        f'<div style="background:{color};color:white;border-radius:8px;'
-                        f'padding:12px;text-align:center">'
-                        f'<strong>{vendor}</strong><br/>'
-                        f'<span style="font-size:1.5rem;font-weight:900">{n}</span> 項</div>',
-                        unsafe_allow_html=True,
-                    )
-                con.close()
-
-            st.divider()
-
-            f1, f2, f3 = st.columns([2, 2, 1])
-            if _is_admin:
-                sel_vendor = f1.selectbox("通路篩選", ["全部"] + _RETAIL_BRANDS, key="v_vendor")
-            else:
-                sel_vendor = _brand
-                f1.markdown(
-                    f'<div style="background:{VENDOR_COLOR.get(_brand,"#888")};color:white;'
-                    f'border-radius:6px;padding:6px 12px;font-weight:600;font-size:0.9rem">'
-                    f'通路：{_brand}</div>',
+        with st.expander("📊 各通路商品數量"):
+            _show_vendors = _RETAIL_BRANDS if _is_admin else [_brand]
+            cols = st.columns(min(len(_show_vendors), 5))
+            con = _db()
+            for i, vendor in enumerate(_show_vendors):
+                n = con.execute(
+                    "SELECT COUNT(*) FROM fitness_product WHERE vendor=?", (vendor,)
+                ).fetchone()[0]
+                color = VENDOR_COLOR.get(vendor, "#888")
+                cols[i % 5].markdown(
+                    f'<div style="background:{color};color:white;border-radius:8px;'
+                    f'padding:12px;text-align:center">'
+                    f'<strong>{vendor}</strong><br/>'
+                    f'<span style="font-size:1.5rem;font-weight:900">{n}</span> 項</div>',
                     unsafe_allow_html=True,
                 )
-            sel_cat  = f2.selectbox("分類篩選", ["全部", "蛋白質", "主食", "蔬果", "乳製品", "保健品", "即食"], key="v_cat")
-            show_low = f3.checkbox("僅低庫存", key="v_low")
+            con.close()
 
-            products = get_products(
-                vendor=None if sel_vendor == "全部" else sel_vendor,
-                category=None if sel_cat == "全部" else sel_cat,
-                low_stock_only=show_low,
-            )
-            st.caption(f"顯示 {len(products)} 筆商品")
-            st.divider()
+        st.divider()
 
-            for p in products:
-                vendor     = p["vendor"]
-                color      = VENDOR_COLOR.get(vendor, "#888")
-                cat_icon   = CAT_ICON.get(p["category"], "📦")
-                stock      = p["stock"]
-                stock_color = "#E53935" if stock == 0 else ("#FF9800" if stock <= 30 else "#43A047")
+        # ── 篩選列 + 新增按鈕 ────────────────────────────────────────────────
+        _all_cats = ["全部", "蛋白質", "主食", "蔬果", "乳製品", "保健品", "即食",
+                     "甜食", "甜點", "飲料", "咖啡", "酒類", "有機食品"]
+        if _is_admin:
+            fc1, fc2, fc3, fc4 = st.columns([2, 2, 1, 1])
+            sel_vendor = fc1.selectbox("通路", ["全部"] + _RETAIL_BRANDS, key="v_vendor", label_visibility="collapsed")
+            sel_cat    = fc2.selectbox("分類", _all_cats, key="v_cat", label_visibility="collapsed")
+            show_low   = fc3.checkbox("僅低庫存", key="v_low")
+            _add_col   = fc4
+        else:
+            sel_vendor = _brand
+            fc1, fc2, fc3 = st.columns([2, 1, 1])
+            sel_cat  = fc1.selectbox("分類", _all_cats, key="v_cat", label_visibility="collapsed")
+            show_low = fc2.checkbox("僅低庫存", key="v_low")
+            _add_col = fc3
 
-                with st.container(border=True):
-                    col_info, col_stock, col_btn = st.columns([5, 1, 1])
+        if _add_col.button("➕ 新增", key="btn_add_product", use_container_width=True, type="primary"):
+            _dialog_add_product(_brand, _is_admin)
 
-                    with col_info:
-                        st.markdown(
-                            f'<span style="background:{color};color:white;border-radius:4px;'
-                            f'padding:2px 8px;font-size:0.78rem;font-weight:600">{vendor}</span>'
-                            f'&nbsp;{cat_icon}&nbsp;<strong>{p["name"]}</strong>'
-                            f'&nbsp;<span style="color:#777;font-size:0.85rem">'
-                            f'蛋白質 {p["protein_g"]}g ｜ {p["calories"]} kcal ｜ ${p["price"]}</span>',
-                            unsafe_allow_html=True,
-                        )
+        products = get_products(
+            vendor=None if sel_vendor == "全部" else sel_vendor,
+            category=None if sel_cat == "全部" else sel_cat,
+            low_stock_only=show_low,
+        )
+        st.caption(f"顯示 {len(products)} 筆商品")
+        st.divider()
 
-                    with col_stock:
-                        st.markdown(
-                            f'<div style="text-align:center;color:{stock_color};font-weight:700;padding-top:4px">'
-                            f'庫存 {stock}</div>',
-                            unsafe_allow_html=True,
-                        )
+        for p in products:
+            vendor     = p["vendor"]
+            color      = VENDOR_COLOR.get(vendor, "#888")
+            cat_icon   = CAT_ICON.get(p["category"], "📦")
+            stock      = p["stock"]
+            stock_color = "#E53935" if stock == 0 else ("#FF9800" if stock <= 30 else "#43A047")
 
-                    with col_btn:
-                        if st.button("✏️ 編輯", key=f"edit_{p['id']}"):
-                            st.session_state[f"editing_{p['id']}"] = True
+            with st.container(border=True):
+                col_info, col_stock, col_btn, col_del = st.columns([5, 1, 1, 1])
 
-                    if st.session_state.get(f"editing_{p['id']}"):
-                        with st.form(f"form_{p['id']}"):
-                            st.markdown(f"**✏️ 編輯商品：{p['name']}**")
-                            e1, e2 = st.columns(2)
-                            new_name  = e1.text_input("商品名稱", value=p["name"])
-                            _cat_opts = ["蛋白質", "主食", "蔬果", "乳製品", "保健品", "即食"]
-                            new_cat   = e2.selectbox("分類", _cat_opts,
-                                                     index=_cat_opts.index(p["category"]) if p["category"] in _cat_opts else 0)
-                            e3, e4, e5, e6 = st.columns(4)
-                            new_price    = e3.number_input("售價 ($)", min_value=0, max_value=99999, value=int(p["price"]))
-                            new_stock_v  = e4.number_input("庫存",     min_value=0, max_value=99999, value=int(p["stock"]))
-                            new_protein  = e5.number_input("蛋白質 (g)", min_value=0.0, max_value=999.0,
-                                                            value=float(p["protein_g"]), step=0.1, format="%.1f")
-                            new_calories = e6.number_input("熱量 (kcal)", min_value=0, max_value=9999, value=int(p["calories"]))
-                            c1, c2 = st.columns(2)
-                            save   = c1.form_submit_button("✅ 儲存", type="primary")
-                            cancel = c2.form_submit_button("取消")
-                        if save:
-                            update_product(p["id"], new_name, new_cat, new_protein, new_calories, new_price, new_stock_v)
-                            st.session_state[f"editing_{p['id']}"] = False
-                            st.success(f"已更新「{new_name}」")
-                            st.rerun()
-                        if cancel:
-                            st.session_state[f"editing_{p['id']}"] = False
-                            st.rerun()
+                with col_info:
+                    st.markdown(
+                        f'<span style="background:{color};color:white;border-radius:4px;'
+                        f'padding:2px 8px;font-size:0.78rem;font-weight:600">{vendor}</span>'
+                        f'&nbsp;{cat_icon}&nbsp;<strong>{p["name"]}</strong>'
+                        f'&nbsp;<span style="color:#777;font-size:0.85rem">'
+                        f'蛋白質 {p["protein_g"]}g ｜ {p["calories"]} kcal ｜ ${p["price"]}</span>',
+                        unsafe_allow_html=True,
+                    )
+
+                with col_stock:
+                    st.markdown(
+                        f'<div style="text-align:center;color:{stock_color};font-weight:700;padding-top:4px">'
+                        f'庫存 {stock}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                with col_btn:
+                    if st.button("✏️ 編輯", key=f"edit_{p['id']}"):
+                        st.session_state[f"editing_{p['id']}"] = True
+
+                with col_del:
+                    if st.button("🗑️", key=f"del_{p['id']}", help="刪除此商品"):
+                        st.session_state[f"confirm_del_{p['id']}"] = True
+                if st.session_state.get(f"confirm_del_{p['id']}"):
+                    st.warning(f"確定要刪除「{p['name']}」？")
+                    _dc1, _dc2 = st.columns(2)
+                    if _dc1.button("確認刪除", key=f"do_del_{p['id']}", type="primary"):
+                        delete_product(p["id"])
+                        st.session_state.pop(f"confirm_del_{p['id']}", None)
+                        st.rerun()
+                    if _dc2.button("取消", key=f"cancel_del_{p['id']}"):
+                        st.session_state.pop(f"confirm_del_{p['id']}", None)
+                        st.rerun()
+
+                if st.session_state.get(f"editing_{p['id']}"):
+                    _all_cat_opts = ["蛋白質", "主食", "蔬果", "乳製品", "保健品", "即食",
+                                     "甜食", "甜點", "飲料", "咖啡", "酒類", "有機食品"]
+                    with st.form(f"form_{p['id']}"):
+                        st.markdown(f"**✏️ 編輯商品：{p['name']}**")
+                        e1, e2 = st.columns(2)
+                        new_name  = e1.text_input("商品名稱", value=p["name"])
+                        new_cat   = e2.selectbox("分類", _all_cat_opts,
+                                                 index=_all_cat_opts.index(p["category"]) if p["category"] in _all_cat_opts else 0)
+                        e3, e4, e5, e6 = st.columns(4)
+                        new_price    = e3.number_input("售價 ($)", min_value=0, max_value=99999, value=int(p["price"]))
+                        new_stock_v  = e4.number_input("庫存",     min_value=0, max_value=99999, value=int(p["stock"]))
+                        new_protein  = e5.number_input("蛋白質 (g)", min_value=0.0, max_value=999.0,
+                                                        value=float(p["protein_g"]), step=0.1, format="%.1f")
+                        new_calories = e6.number_input("熱量 (kcal)", min_value=0, max_value=9999, value=int(p["calories"]))
+                        c1, c2 = st.columns(2)
+                        save   = c1.form_submit_button("✅ 儲存", type="primary")
+                        cancel = c2.form_submit_button("取消")
+                    if save:
+                        update_product(p["id"], new_name, new_cat, new_protein, new_calories, new_price, new_stock_v)
+                        st.session_state[f"editing_{p['id']}"] = False
+                        st.success(f"已更新「{new_name}」")
+                        st.rerun()
+                    if cancel:
+                        st.session_state[f"editing_{p['id']}"] = False
+                        st.rerun()
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -310,18 +382,23 @@ with (tab2 if tab2 is not None else _null):
             # 卡片間距
             st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
 
-            _is_service_inq = _is_ins_inq or (_is_gym_only and inq.get("goal","").startswith("課程報名")) or _is_finance
+            _is_ins_inq    = "保險" in (inq.get("goal") or "")
+            _is_course_inq = inq.get("goal","").startswith("課程報名")
+            _is_service_inq = _is_ins_inq or (_is_gym_only and _is_course_inq) or _is_finance
             _dtype = inq.get("delivery_type") or "外送"
             _dtcfg = DELIVERY_TYPE_CFG.get(_dtype, DELIVERY_TYPE_CFG["外送"])
-            _dtype_badge = (
-                ""
-                if _is_service_inq
-                else (
+            if _is_finance:
+                _dtype_badge = '<span style="background:#1B5E20;color:white;border-radius:10px;padding:2px 8px;font-size:0.78rem;font-weight:700;white-space:nowrap">💰 理財諮詢</span>'
+            elif _is_ins_inq:
+                _dtype_badge = '<span style="background:#6A1B9A;color:white;border-radius:10px;padding:2px 8px;font-size:0.78rem;font-weight:700;white-space:nowrap">🛡️ 保險申請</span>'
+            elif _is_course_inq:
+                _dtype_badge = '<span style="background:#0277BD;color:white;border-radius:10px;padding:2px 8px;font-size:0.78rem;font-weight:700;white-space:nowrap">🏋️ 課程報名</span>'
+            else:
+                _dtype_badge = (
                     f'<span style="background:{_dtcfg["color"]};color:white;border-radius:10px;'
                     f'padding:2px 8px;font-size:0.78rem;font-weight:700;white-space:nowrap">'
                     f'{_dtcfg["icon"]} {_dtcfg["label"]}</span>'
                 )
-            )
 
             with st.container(border=True):
                 # ── 卡片 Header：顏色條 + 狀態標籤 + 單號 + 時間 ────────────
@@ -373,7 +450,7 @@ with (tab2 if tab2 is not None else _null):
 
                 # ── 推薦商品清單（依通路分組）────────────────────────────────
                 pj = inq.get("products_json", "")
-                if pj:
+                if pj and not _is_service_inq:
                     try:
                         plist = json.loads(pj)
                         if plist:
@@ -411,7 +488,7 @@ with (tab2 if tab2 is not None else _null):
 
                 # ── Delivery info（外送記錄，支援多通路分批配送）──────────────
                 dispatches = get_dispatches(inq_id)
-                if dispatches:
+                if dispatches and not _is_service_inq:
                     for _d in dispatches:
                         _dco  = _d.get("delivery_company", "")
                         _dico = DELIVERY_ICON.get(_dco, "📦") if _dco else "🚚"
@@ -432,7 +509,6 @@ with (tab2 if tab2 is not None else _null):
                 except Exception:
                     pass
 
-                _is_ins_inq = "保險" in (inq.get("goal") or "")
                 if _imgs:
                     _exp_label = "✍️ 申請人簽名" if _is_ins_inq else f"📷 用戶上傳照片（{len(_imgs)} 張）"
                     with st.expander(_exp_label, expanded=_is_ins_inq):
@@ -477,9 +553,13 @@ with (tab2 if tab2 is not None else _null):
 【除外責任】故意行為、戰爭、核子輻射所致事故不予承保。
 
 統超保險經紀人股份有限公司"""
-                            with st.expander("📄 保單預覽", expanded=True):
-                                st.text(_contract_preview)
                             with st.form(f"ins_send_form_{inq_id}"):
+                                _edited_contract = st.text_area(
+                                    "📄 保單內容（可編輯後再發送）",
+                                    value=_contract_preview,
+                                    height=300,
+                                    key=f"ins_contract_{inq_id}",
+                                )
                                 _extra_note = st.text_area(
                                     "補充說明給用戶（選填）",
                                     placeholder="例：此保單已包含您提及的澎湖旅遊，請仔細閱讀後簽名。",
@@ -514,7 +594,7 @@ with (tab2 if tab2 is not None else _null):
                                                 f"保單已準備就緒。\n\n"
                                                 f"請登入「統一生活管家」→「我的訂單」→ 找到此申請單號 → 點擊「✍️ 簽署保單」完成電子簽名。\n\n"
                                                 + (f"保險專員留言：{_extra_note}\n\n" if _extra_note else "")
-                                                + f"保單摘要：\n{_contract_preview}\n\n"
+                                                + f"保單摘要：\n{_edited_contract}\n\n"
                                                 f"統超保險經紀人 敬上"
                                             ),
                                         )
@@ -668,7 +748,49 @@ with (tab2 if tab2 is not None else _null):
                     for d in dispatches
                 )
 
-                if status not in ("已拒絕", "已完成", "待簽名", "待後台確認") and not _already_this_vendor and not (_is_ins_inq and _is_insurance):
+                # ── 理財諮詢：專屬操作區 ────────────────────────────────────
+                if _is_finance and status not in ("已完成", "已拒絕"):
+                    st.divider()
+                    st.markdown("#### 💰 理財諮詢操作")
+                    _fc1, _fc2 = st.columns(2)
+                    if _fc1.button("✅ 已安排專員聯繫，標記完成", key=f"fin_done_{inq_id}", type="primary", use_container_width=True):
+                        _fdb = _db()
+                        _fdb.execute(
+                            "UPDATE pms_form_feedback SET status='已完成', accepted_at=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                            (datetime.now().isoformat(),
+                             f"{datetime.now().strftime('%m/%d %H:%M')} [統一證券]: 已安排專員與您聯繫，感謝您的查詢。\n",
+                             inq_id),
+                        )
+                        _fdb.commit()
+                        _urow_f = _fdb.execute("SELECT email, username FROM users WHERE id=?", (inq.get("user_id",0),)).fetchone()
+                        _fdb.close()
+                        if _urow_f and _urow_f["email"]:
+                            try:
+                                _send_email(
+                                    to_email=_urow_f["email"],
+                                    subject=f"【統一證券】您的理財諮詢 {inq_id} 已安排專員聯繫",
+                                    body=(
+                                        f"親愛的 {_urow_f['username']} 您好，\n\n"
+                                        f"您的理財諮詢申請（申請單號：{inq_id}）已由統一證券專員接手，"
+                                        f"將盡快以電話或 Email 與您聯繫。\n\n"
+                                        f"諮詢內容：{inq.get('note','')}\n\n統一證券 敬上"
+                                    ),
+                                )
+                            except Exception:
+                                pass
+                        st.success("✅ 已標記完成，Email 通知已發送！")
+                        st.rerun()
+                    if _fc2.button("❌ 拒絕申請", key=f"fin_rej_{inq_id}", use_container_width=True):
+                        _fdb = _db()
+                        _fdb.execute(
+                            "UPDATE pms_form_feedback SET status='已拒絕', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                            (f"{datetime.now().strftime('%m/%d %H:%M')} [統一證券]: 很抱歉，目前無法受理此諮詢申請。\n", inq_id),
+                        )
+                        _fdb.commit(); _fdb.close()
+                        st.warning(f"諮詢 {inq_id} 已拒絕。")
+                        st.rerun()
+
+                if not _is_finance and status not in ("已拒絕", "已完成", "待簽名", "待後台確認") and not _already_this_vendor and not (_is_ins_inq and _is_insurance):
                     st.divider()
                     if status == "待處理":
                         if _dtype == "自取":
@@ -1066,7 +1188,7 @@ with (tab3 if tab3 is not None else _null):
 # ══════════════════════════════════════════════════════════════════════════════
 
 with (tab4 if tab4 is not None else _null):
-    st.markdown("#### 本系統共整合 18 個 MCP 工具，由 FastMCP（fitness-grocery）提供。")
+    st.markdown("#### 本系統共整合 19 個 MCP 工具，由 FastMCP（fitness-grocery）提供。")
     st.caption(
         "前端 AI（Claude claude-sonnet-4-6）透過 **mcp.Client** 真實呼叫工具；"
         "後台 AI 助手也使用相同機制呼叫 dispatch_delivery 與 send_email_notification。"
