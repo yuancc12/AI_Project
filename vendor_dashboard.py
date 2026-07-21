@@ -23,6 +23,7 @@ from vendor_helpers import (
     check_vendor_login, _ensure_vendor_users,
     dispatch_via_mcp, admin_ollama_chat, OLLAMA_MODEL,
 )
+from mcp_server import _send_email
 
 # ── Page config ──────────────────────────────────────────────────────────────
 
@@ -74,15 +75,17 @@ st.caption("統一集團 × MCP Server ✦ 商品庫存 · 採買諮詢 · 外�
 
 # ── 品牌判斷（頁籤與統計共用） ────────────────────────────────────────────────
 
-_brand_v       = st.session_state.vendor_brand
-_is_gym_only   = _brand_v == "健身房"
-_is_admin_v    = _brand_v == "全部"
-_is_driver     = _brand_v == "外送員"
-_is_gym_vendor = _is_gym_only or _is_admin_v
+_brand_v        = st.session_state.vendor_brand
+_is_gym_only    = _brand_v == "健身房"
+_is_admin_v     = _brand_v == "全部"
+_is_driver      = _brand_v == "外送員"
+_is_gym_vendor  = _is_gym_only or _is_admin_v
+_is_insurance   = _brand_v == "保險"
+_is_finance     = _brand_v == "金融"
 
 # ── 頂部統計 ─────────────────────────────────────────────────────────────────
 
-_stat_vendor = "" if _is_admin_v else (_brand_v if _brand_v not in ("全部", "外送員", "健身房") else "")
+_stat_vendor = "" if _is_admin_v else (_brand_v if _brand_v not in ("全部", "外送員", "健身房", "保險", "金融") else "")
 total, out_of_stock, low_stock_count, avg_protein, pending, delivering = get_stats(_stat_vendor)
 if _is_driver:
     m1, m2 = st.columns(2)
@@ -93,6 +96,10 @@ elif _is_gym_only:
     m1.metric("商品總數",       total)
     m2.metric("⚠️ 低庫存(≤30)", low_stock_count)
     m3.metric("⏳ 待處理諮詢",  pending)
+elif _is_insurance or _is_finance:
+    m1, m2 = st.columns(2)
+    m1.metric("⏳ 待處理申請", pending)
+    m2.metric("✅ 已完成",     delivering)
 else:
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("商品總數",       total)
@@ -115,6 +122,11 @@ elif _is_gym_only:
     _tabs = st.tabs(_tab_labels)
     tab1, tab5 = None, None
     tab2, tab3, tab4, tab6 = _tabs
+elif _is_insurance or _is_finance:
+    _tab_labels = ["📋 保險申請單"]
+    _tabs = st.tabs(_tab_labels)
+    tab2 = _tabs[0]
+    tab1 = tab3 = tab4 = tab5 = tab6 = None
 elif _is_admin_v:
     _tab_labels = ["🛒 商品庫存", "📋 採買諮詢單", "🤖 AI 派送助手", "🔌 MCP 工具總覽", "🚴 外送派件", "🏋️ Being Sport 課程管理"]
     _tabs = st.tabs(_tab_labels)
@@ -249,8 +261,8 @@ with (tab2 if tab2 is not None else _null):
     st.markdown("#### 用戶透過 AI 助手提交的採買諮詢，在此確認接單或拒絕並派送。")
     st.caption("派送操作透過 **mcp.Client** 真實呼叫 `dispatch_delivery` MCP 工具。")
 
-    _SICON = {"全部": "📋", "待處理": "⏳", "配送中": "🚚", "預留中": "📦", "已拒絕": "❌", "已完成": "✅"}
-    status_opts = ["全部", "待處理", "配送中", "預留中", "已拒絕", "已完成"]
+    _SICON = {"全部": "📋", "待處理": "⏳", "待簽名": "✍️", "待後台確認": "🔍", "配送中": "🚚", "預留中": "📦", "已拒絕": "❌", "已完成": "✅"}
+    status_opts = ["全部", "待處理", "待簽名", "待後台確認", "配送中", "預留中", "已拒絕", "已完成"]
     _rf_col, _sel_col = st.columns([1, 8])
     if _rf_col.button("🔄", key="inq_refresh", help="重新整理"):
         st.rerun()
@@ -260,7 +272,7 @@ with (tab2 if tab2 is not None else _null):
         horizontal=True, key="inq_status", label_visibility="collapsed",
     )
 
-    inquiries = get_inquiries(sel_status, st.session_state.get("vendor_store"), brand=_brand_v, is_gym=_is_gym_only)
+    inquiries = get_inquiries(sel_status, st.session_state.get("vendor_store"), brand=_brand_v, is_gym=_is_gym_only, is_insurance=(_is_insurance or _is_finance))
     st.caption(f"共 {len(inquiries)} 筆{'（' + sel_status + '）' if sel_status != '全部' else ''}")
     st.divider()
 
@@ -381,20 +393,183 @@ with (tab2 if tab2 is not None else _null):
                             f"{_dco_part}{_trk_part}　｜　預計 {_eta} 送達"
                         )
 
-                # ── 用戶上傳照片 ─────────────────────────────────────────────
+                # ── 用戶上傳照片 / 保險簽名 ─────────────────────────────────
                 _imgs = []
                 try:
                     _imgs = json.loads(inq.get("images_json", "[]") or "[]")
                 except Exception:
                     pass
+
+                _is_ins_inq = "保險" in (inq.get("goal") or "")
                 if _imgs:
-                    with st.expander(f"📷 用戶上傳照片（{len(_imgs)} 張）", expanded=True):
+                    _exp_label = "✍️ 申請人簽名" if _is_ins_inq else f"📷 用戶上傳照片（{len(_imgs)} 張）"
+                    with st.expander(_exp_label, expanded=_is_ins_inq):
                         _icols = st.columns(min(len(_imgs), 3))
                         for _ii, _ip in enumerate(_imgs):
                             if os.path.exists(_ip):
-                                _icols[_ii % 3].image(_ip, use_container_width=True)
+                                _icols[_ii % 3].image(_ip, caption="電子簽名" if _is_ins_inq else None, use_container_width=True)
                             else:
                                 _icols[_ii % 3].caption(f"📎 {_ip}")
+
+                # ── 保險申請：四步流程操作 ─────────────────────────────────
+                if _is_ins_inq and _is_insurance and status not in ("已完成", "已拒絕"):
+                    st.divider()
+                    st.markdown("#### 📋 保單操作")
+
+                    if status == "待處理":
+                        # Step 1: 後台審核 → 發送保單給用戶簽名
+                        st.info("📋 請確認申請內容後，點擊「發送保單」產生正式保單供用戶電子簽名。")
+                        _ins_b1, _ins_b2 = st.columns(2)
+                        if _ins_b1.button("📤 發送保單給用戶簽名", key=f"ins_send_{inq_id}", type="primary", use_container_width=True):
+                            st.session_state[f"ins_act_{inq_id}"] = "send"
+                        if _ins_b2.button("❌ 拒絕申請", key=f"ins_reject_{inq_id}", use_container_width=True):
+                            st.session_state[f"ins_act_{inq_id}"] = "reject"
+
+                        if st.session_state.get(f"ins_act_{inq_id}") == "send":
+                            _contract_preview = f"""統超保險旅遊綜合保險保單
+申請單號：{inq_id}　　申請人：{inq.get('contact_name','')}
+
+【承保範圍】
+・意外死亡及傷殘保險金（最高 NT$300 萬）
+・海外突發疾病醫療費用（最高 NT$50 萬）
+・旅遊行程延誤補償（逾 6 小時每次 NT$1,000，上限 NT$3,000）
+・旅行文件遺失緊急協助服務
+
+【保險期間】以申請書所載旅遊出發日起至返回日止。
+
+【重要事項】
+1. 被保險人須年滿 15 歲，未滿 75 歲。
+2. 旅遊目的地不得為外交部「警告」或「不建議前往」地區。
+3. 事故發生後應於 30 日內申請理賠。
+
+【除外責任】故意行為、戰爭、核子輻射所致事故不予承保。
+
+統超保險經紀人股份有限公司　客服：0800-555-880"""
+                            with st.expander("📄 保單預覽", expanded=True):
+                                st.text(_contract_preview)
+                            with st.form(f"ins_send_form_{inq_id}"):
+                                _extra_note = st.text_area(
+                                    "補充說明給用戶（選填）",
+                                    placeholder="例：此保單已包含您提及的澎湖旅遊，請仔細閱讀後簽名。",
+                                    key=f"ins_extra_{inq_id}",
+                                )
+                                _sc1, _sc2 = st.columns(2)
+                                _do_send   = _sc1.form_submit_button("📤 確認發送，通知用戶簽名", type="primary")
+                                _do_cancel = _sc2.form_submit_button("取消")
+                            if _do_send:
+                                _idb = _db()
+                                _now_str = datetime.now().strftime('%m/%d %H:%M')
+                                _msg = f"{_now_str} [統超保險]: 您好，您的旅遊保險申請已核閱完畢，請登入「統一生活管家」→「我的訂單」，找到此申請單號並點擊「✍️ 簽署保單」完成電子簽名。\n"
+                                if _extra_note:
+                                    _msg += f"{_now_str} [統超保險]: {_extra_note}\n"
+                                _idb.execute(
+                                    "UPDATE pms_form_feedback SET status='待簽名', accepted_at=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                                    (datetime.now().isoformat(), _msg, inq_id),
+                                )
+                                _idb.commit()
+                                _urow2 = _idb.execute(
+                                    "SELECT email, username FROM users WHERE id=?", (inq.get("user_id", 0),)
+                                ).fetchone()
+                                _idb.close()
+                                if _urow2 and _urow2["email"]:
+                                    try:
+                                        _send_email(
+                                            to_email=_urow2["email"],
+                                            subject=f"【統超保險】您的旅遊保險 {inq_id} 保單已產生，請簽名確認",
+                                            body=(
+                                                f"親愛的 {_urow2['username']} 您好，\n\n"
+                                                f"您的旅遊保險申請（申請單號：{inq_id}）已由統超保險核閱完畢，"
+                                                f"保單已準備就緒。\n\n"
+                                                f"請登入「統一生活管家」→「我的訂單」→ 找到此申請單號 → 點擊「✍️ 簽署保單」完成電子簽名。\n\n"
+                                                + (f"保險專員留言：{_extra_note}\n\n" if _extra_note else "")
+                                                + f"保單摘要：\n{_contract_preview}\n\n"
+                                                f"客服電話：0800-555-880\n統超保險經紀人 敬上"
+                                            ),
+                                        )
+                                    except Exception:
+                                        pass
+                                st.success(f"✅ 保單已發送！已通知用戶前往電子簽名。")
+                                st.session_state.pop(f"ins_act_{inq_id}", None)
+                                st.rerun()
+                            if _do_cancel:
+                                st.session_state.pop(f"ins_act_{inq_id}", None)
+                                st.rerun()
+
+                        elif st.session_state.get(f"ins_act_{inq_id}") == "reject":
+                            with st.form(f"ins_rej_form_{inq_id}"):
+                                st.markdown("**確認拒絕此保險申請**")
+                                _rj_reason = st.text_area("拒絕原因", placeholder="例：所申請旅遊目的地列為警示地區，無法承保", key=f"ins_rj_{inq_id}")
+                                _rc1, _rc2 = st.columns(2)
+                                _do_rj   = _rc1.form_submit_button("確認拒絕", type="secondary")
+                                _do_rjc  = _rc2.form_submit_button("取消")
+                            if _do_rj:
+                                _idb = _db()
+                                _idb.execute(
+                                    "UPDATE pms_form_feedback SET status='已拒絕', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                                    (f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: {_rj_reason or '申請未通過審核，如有疑問請致電 0800-555-880。'}\n", inq_id),
+                                )
+                                _idb.commit(); _idb.close()
+                                st.warning(f"申請 {inq_id} 已拒絕。")
+                                st.session_state.pop(f"ins_act_{inq_id}", None)
+                                st.rerun()
+                            if _do_rjc:
+                                st.session_state.pop(f"ins_act_{inq_id}", None)
+                                st.rerun()
+
+                    elif status == "待簽名":
+                        # Step 2: Waiting for user to sign
+                        st.warning("⏳ 等待用戶登入並簽署保單中...")
+                        if st.button("↩️ 撤回保單（重設為待處理）", key=f"ins_recall_{inq_id}", use_container_width=True):
+                            _idb = _db()
+                            _idb.execute(
+                                "UPDATE pms_form_feedback SET status='待處理', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                                (f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: 保單已撤回，請重新申請或聯繫客服。\n", inq_id),
+                            )
+                            _idb.commit(); _idb.close()
+                            st.rerun()
+
+                    elif status == "待後台確認":
+                        # Step 3: User signed, backend confirms
+                        st.success("✅ 用戶已完成電子簽名，請確認後使保單生效。")
+                        _ins_c1, _ins_c2 = st.columns(2)
+                        if _ins_c1.button("✅ 確認生效", key=f"ins_approve_{inq_id}", type="primary", use_container_width=True):
+                            _idb = _db()
+                            _idb.execute(
+                                "UPDATE pms_form_feedback SET status='已完成', accepted_at=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                                (datetime.now().isoformat(),
+                                 f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: 保單已確認生效，電子保單將另行寄送至您的信箱。\n",
+                                 inq_id),
+                            )
+                            _idb.commit()
+                            _urow = _idb.execute(
+                                "SELECT email, username FROM users WHERE id=?", (inq.get("user_id", 0),)
+                            ).fetchone()
+                            _idb.close()
+                            if _urow and _urow["email"]:
+                                try:
+                                    _send_email(
+                                        to_email=_urow["email"],
+                                        subject=f"【統超保險】您的旅遊保險 {inq_id} 已確認生效",
+                                        body=(
+                                            f"親愛的 {_urow['username']} 您好，\n\n"
+                                            f"您的旅遊保險申請（申請單號：{inq_id}）已由統超保險經紀人確認生效。\n\n"
+                                            f"保單詳情：\n{inq.get('note','')}\n\n"
+                                            f"如有任何問題，請致電 0800-555-880。\n\n統超保險經紀人 敬上"
+                                        ),
+                                    )
+                                except Exception:
+                                    pass
+                            st.success(f"✅ 保單 {inq_id} 已確認生效，Email 通知已發送！")
+                            st.rerun()
+                        if _ins_c2.button("❌ 拒絕申請", key=f"ins_reject_{inq_id}", use_container_width=True):
+                            _idb = _db()
+                            _idb.execute(
+                                "UPDATE pms_form_feedback SET status='已拒絕', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                                (f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: 申請未通過審核，如有疑問請致電 0800-555-880。\n", inq_id),
+                            )
+                            _idb.commit(); _idb.close()
+                            st.warning(f"申請 {inq_id} 已拒絕。")
+                            st.rerun()
 
                 # ── 雙向訊息紀錄 ─────────────────────────────────────────────
                 import re as _re
@@ -461,7 +636,7 @@ with (tab2 if tab2 is not None else _null):
                     for d in dispatches
                 )
 
-                if status not in ("已拒絕", "已完成") and not _already_this_vendor:
+                if status not in ("已拒絕", "已完成", "待簽名", "待後台確認") and not _already_this_vendor and not (_is_ins_inq and _is_insurance):
                     st.divider()
                     if status == "待處理":
                         if _dtype == "自取":
@@ -737,11 +912,13 @@ with (tab2 if tab2 is not None else _null):
                 if status not in ("已完成", "已拒絕"):
                     with st.expander("⚙️ 手動變更狀態", expanded=False):
                         _status_options = {
-                            "待處理": "⏳ 待處理",
-                            "預留中": "📦 預留中（等待自取）",
-                            "配送中": "🚚 配送中",
-                            "已完成": "✅ 已完成",
-                            "已拒絕": "❌ 已拒絕",
+                            "待處理":   "⏳ 待處理",
+                            "待簽名":   "✍️ 待簽名（等待用戶簽署）",
+                            "待後台確認": "🔍 待後台確認（用戶已簽名）",
+                            "預留中":   "📦 預留中（等待自取）",
+                            "配送中":   "🚚 配送中",
+                            "已完成":   "✅ 已完成",
+                            "已拒絕":   "❌ 已拒絕",
                         }
                         _available = [s for s in _status_options if s != status]
                         with st.form(f"status_form_{inq_id}"):
