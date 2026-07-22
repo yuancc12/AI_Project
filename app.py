@@ -927,38 +927,74 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                 if products_rec:
                     st.markdown("**🛒 推薦補充商品**")
                     for _rp_idx, p in enumerate(products_rec):
-                        vendor = p.get("vendor", "")
-                        emoji  = VENDOR_EMOJI.get(vendor, "⚪")
+                        vendor  = p.get("vendor", "")
+                        emoji   = VENDOR_EMOJI.get(vendor, "⚪")
                         _rpname = p.get("name", "")
-                        _rpc1, _rpc2 = st.columns([5, 1])
-                        _rpc1.markdown(
-                            f"**{emoji} {_rpname}** &nbsp;`{vendor}`  \n"
-                            f"🥩 {p.get('protein_g', 0)}g蛋白質 ｜ "
-                            f"🔥 {p.get('calories', 0)} kcal ｜ "
-                            f"💰 **${p.get('price', 0)}** ｜ "
-                            f"📦 庫存 {p.get('stock', 0)}"
-                        )
-                        if p.get("stock", 0) > 0:
-                            _rp_key = f"cart_add_{msg_idx}_rec_{_rp_idx}"
+                        _rstock = p.get("stock", 0)
+                        if _rstock > 0:
+                            _rp_key   = f"cart_add_{msg_idx}_rec_{_rp_idx}"
                             _cart_now = st.session_state.get("cart", {})
-                            _qty = _cart_now.get(_rpname, {}).get("qty", 0)
-                            _rlbl = f"×{_qty} 再加" if _qty > 0 else "＋ 選取"
-                            if _rpc2.button(_rlbl, key=_rp_key, use_container_width=True):
+                            _qty      = _cart_now.get(_rpname, {}).get("qty", 0)
+                            _prefix   = f"✓×{_qty} " if _qty > 0 else "＋ "
+                            _rlbl = (
+                                f"{_prefix}{emoji} {_rpname}  "
+                                f"${p.get('price',0)} · {vendor} · "
+                                f"蛋白質{p.get('protein_g',0)}g · {p.get('calories',0)}kcal · "
+                                f"庫存{_rstock}"
+                            )
+                            if st.button(_rlbl, key=_rp_key, use_container_width=True):
                                 _cart_new = dict(st.session_state.get("cart", {}))
                                 if _rpname in _cart_new:
                                     _cart_new[_rpname]["qty"] += 1
                                 else:
                                     _cart_new[_rpname] = {
-                                        "name":     _rpname,
-                                        "qty":      1,
-                                        "price":    p.get("price", 0),
-                                        "vendor":   vendor,
+                                        "name":      _rpname,
+                                        "qty":       1,
+                                        "price":     p.get("price", 0),
+                                        "vendor":    vendor,
                                         "protein_g": p.get("protein_g", 0),
-                                        "calories": p.get("calories", 0),
-                                        "stock":    p.get("stock", 0),
+                                        "calories":  p.get("calories", 0),
+                                        "stock":     _rstock,
                                     }
                                 st.session_state.cart = _cart_new
                                 st.rerun()
+                        else:
+                            st.caption(f"~~{emoji} {_rpname}~~  ·  {vendor}  ·  已售完")
+            continue
+
+        # ── 健身課程列表 ──────────────────────────────────────────────────────
+        if tool == "get_gym_courses":
+            courses = result.get("courses", [])
+            with st.expander(f"🏋️ 健身課程 — {result.get('message', '')}", expanded=True):
+                if not courses:
+                    st.info(result.get("message", "暫無課程資料"))
+                else:
+                    _sel = st.session_state.get("selected_courses", [])
+                    for _ci, c in enumerate(courses):
+                        avail   = c.get("available_slots", 0)
+                        is_sel  = c["course_name"] in _sel
+                        _prefix = "✓ " if is_sel else "＋ "
+                        _avail_str = f"剩 {avail} 名" if avail > 0 else "已額滿"
+                        _clabel = (
+                            f"{_prefix}🏃 {c['course_name']}  "
+                            f"{c.get('weekday','')} {c.get('time_start','')} "
+                            f"（{c.get('duration_min',0)}分鐘）· "
+                            f"教練 {c.get('coach','')} · "
+                            f"NT${c.get('price_month',0)}/月 · {_avail_str}"
+                        )
+                        _ckey = f"course_sel_{msg_idx}_{_ci}"
+                        if avail > 0:
+                            if st.button(_clabel, key=_ckey, use_container_width=True):
+                                _courses = list(st.session_state.get("selected_courses", []))
+                                cname = c["course_name"]
+                                if cname in _courses:
+                                    _courses.remove(cname)
+                                else:
+                                    _courses.append(cname)
+                                st.session_state.selected_courses = _courses
+                                st.rerun()
+                        else:
+                            st.caption(f"~~🏃 {c['course_name']}~~  ·  {_avail_str}")
             continue
 
         # ── 商品列表（search / recommend / inventory）────────────────────────
@@ -981,37 +1017,36 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                 vendor = p.get("vendor", "")
                 stock  = p.get("stock", 0)
                 emoji  = VENDOR_EMOJI.get(vendor, "⚪")
-                status = f"庫存 {stock}" if stock > 0 else "❌ 售完"
                 _pname = p.get("name", "")
-                _pc1, _pc2 = st.columns([5, 1])
-                _pc1.markdown(
-                    f"**{emoji} {_pname}** &nbsp;`{vendor}`  \n"
-                    f"🥩 {p.get('protein_g', 0)} g蛋白質 ｜ "
-                    f"🔥 {p.get('calories', 0)} kcal ｜ "
-                    f"💰 **${p.get('price', 0)}** ｜ "
-                    f"📦 {status}"
-                )
                 if stock > 0:
                     _cart_key = f"cart_add_{msg_idx}_{tool}_{p_idx}"
                     _cart_now = st.session_state.get("cart", {})
-                    _qty = _cart_now.get(_pname, {}).get("qty", 0)
-                    _btn_label = f"×{_qty} 再加" if _qty > 0 else "＋ 選取"
-                    if _pc2.button(_btn_label, key=_cart_key, use_container_width=True):
+                    _qty      = _cart_now.get(_pname, {}).get("qty", 0)
+                    _prefix   = f"✓×{_qty} " if _qty > 0 else "＋ "
+                    _btn_label = (
+                        f"{_prefix}{emoji} {_pname}  "
+                        f"${p.get('price',0)} · {vendor} · "
+                        f"蛋白質{p.get('protein_g',0)}g · {p.get('calories',0)}kcal · "
+                        f"庫存{stock}"
+                    )
+                    if st.button(_btn_label, key=_cart_key, use_container_width=True):
                         _cart_new = dict(st.session_state.get("cart", {}))
                         if _pname in _cart_new:
                             _cart_new[_pname]["qty"] += 1
                         else:
                             _cart_new[_pname] = {
-                                "name":     _pname,
-                                "qty":      1,
-                                "price":    p.get("price", 0),
-                                "vendor":   vendor,
+                                "name":      _pname,
+                                "qty":       1,
+                                "price":     p.get("price", 0),
+                                "vendor":    vendor,
                                 "protein_g": p.get("protein_g", 0),
-                                "calories": p.get("calories", 0),
-                                "stock":    stock,
+                                "calories":  p.get("calories", 0),
+                                "stock":     stock,
                             }
                         st.session_state.cart = _cart_new
                         st.rerun()
+                else:
+                    st.caption(f"~~{emoji} {_pname}~~  ·  {vendor}  ·  已售完")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1068,6 +1103,7 @@ for k, v in {
     "inquiry_products":   [],
     "conversation_id":    None,
     "cart":               {},
+    "selected_courses":   [],
     "last_products":      [],
     "_pending_delete_id": None,
     "insurance_sign_no": "",
@@ -1833,7 +1869,7 @@ elif st.session_state.stage == "inquiry_form":
                     checked = col_chk.checkbox(label, value=True, key=f"chk_{_chk_idx}")
                     qty = col_qty.number_input(
                         "數量", min_value=1, max_value=max_stock,
-                        value=1, step=1,
+                        value=min(p.get("qty", 1), max_stock), step=1,
                         key=f"qty_{_chk_idx}",
                         label_visibility="collapsed",
                         disabled=not checked,
@@ -2474,6 +2510,29 @@ div[data-testid="stHorizontalBlock"] button[kind="secondary"]{
 
         _total = sum(v["price"] * v["qty"] for v in _cart.values())
         st.markdown(f'💰 **${_total}**')
+
+    # ── 已選課程 Pills ──────────────────────────────────────────────
+    _sel_courses = st.session_state.get("selected_courses", [])
+    if _sel_courses:
+        st.markdown("""<style>
+.cpill-gym{display:inline-block;background:#e3f2fd;border:1.5px solid #1565C0;
+           border-radius:999px;padding:3px 13px;font-size:13px;color:#1a3a6b;
+           font-weight:600;white-space:nowrap;line-height:1.6;}
+</style>""", unsafe_allow_html=True)
+        for _gi, _cn in enumerate(list(_sel_courses)):
+            _gc, _grm = st.columns([7, 1])
+            _gc.markdown(f'<span class="cpill-gym">🏋️ {_cn}</span>', unsafe_allow_html=True)
+            if _grm.button("✕", key=f"course_rm_{_gi}", use_container_width=True, help=f"移除 {_cn}"):
+                _sc = list(st.session_state.selected_courses)
+                _sc.remove(_cn)
+                st.session_state.selected_courses = _sc
+                st.rerun()
+        _enroll_label = f"✅ 確認報名（{len(_sel_courses)} 堂課）"
+        if st.button(_enroll_label, type="primary", use_container_width=True, key="course_enroll_submit"):
+            _names = "、".join(_sel_courses)
+            st.session_state["_pending_prompt"] = f"我要報名 {_names}"
+            st.session_state.selected_courses = []
+            st.rerun()
 
     # ── 3. 接收新輸入 ───────────────────────────────────────────────
     _ep = st.session_state.get("_pending_prompt")
