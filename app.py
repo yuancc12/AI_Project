@@ -889,15 +889,14 @@ def _product_card(p: dict, key_prefix: str) -> str:
     qty     = st.session_state.get("cart", {}).get(name, {}).get("qty", 0)
     st.session_state.setdefault("product_catalog", {})[name] = p
     dimmed  = "opacity:.45;filter:grayscale(80%);" if stock == 0 else ""
-    badge   = (f'<div style="font-size:11px;font-weight:700;color:#00833D;margin:2px 0;">'
-               f'✓×{qty} 已選</div>') if qty > 0 else ""
+    badge   = ""
     if stock > 0:
-        btn_lbl = f"再加 ×{qty}" if qty > 0 else "＋ 加入"
-        btn = (f'<a href="?add_cart={_url_quote(name)}" '
-               f'style="display:block;text-align:center;text-decoration:none;'
-               f'background:#00833D;color:#fff;border-radius:999px;'
-               f'padding:6px 0;font-size:12px;font-weight:600;margin-top:8px;">'
-               f'{btn_lbl}</a>')
+        _na = name.replace('"', '&quot;')
+        btn = (f'<button data-ph="__add_cart__" data-name="{_na}" '
+               f'style="display:block;width:100%;text-align:center;'
+               f'background:#00833D;color:#fff;border:none;border-radius:999px;'
+               f'padding:6px 0;font-size:12px;font-weight:600;margin-top:8px;cursor:pointer;">'
+               f'＋ 加入</button>')
     else:
         btn = '<div style="text-align:center;color:#bbb;font-size:11px;margin-top:8px;">❌ 售完</div>'
     return (
@@ -931,11 +930,12 @@ def _course_card(c: dict) -> str:
     if avail > 0:
         btn_lbl = "取消選擇" if is_sel else "＋ 選課"
         btn_bg  = "#9E9E9E" if is_sel else "#1565C0"
-        btn = (f'<a href="?tog_course={_url_quote(cname)}" '
-               f'style="display:block;text-align:center;text-decoration:none;'
-               f'background:{btn_bg};color:#fff;border-radius:999px;'
-               f'padding:6px 0;font-size:12px;font-weight:600;margin-top:8px;">'
-               f'{btn_lbl}</a>')
+        _ca = cname.replace('"', '&quot;')
+        btn = (f'<button data-ph="__tog_course__" data-name="{_ca}" '
+               f'style="display:block;width:100%;text-align:center;'
+               f'background:{btn_bg};color:#fff;border:none;border-radius:999px;'
+               f'padding:6px 0;font-size:12px;font-weight:600;margin-top:8px;cursor:pointer;">'
+               f'{btn_lbl}</button>')
     else:
         btn = '<div style="text-align:center;color:#bbb;font-size:11px;margin-top:8px;">已額滿</div>'
     return (
@@ -1222,19 +1222,24 @@ with st.sidebar:
         _quick_orders = get_my_inquiries(st.session_state.user_id)[:3]
         if _quick_orders:
             _ORDER_BADGE = {
-                "待處理":   ("#FF9800", "⏳"),
-                "待簽名":   ("#9C27B0", "✍️"),
-                "待後台確認": ("#2196F3", "🔍"),
-                "配送中":   ("#1976D2", "🚚"),
-                "已完成":   ("#43A047", "✅"),
-                "已拒絕":   ("#E53935", "❌"),
-                "預留中":   ("#7B5EA7", "📦"),
+                "01": ("#FF9800", "⏳"),
+                "04": ("#9C27B0", "✍️"),
+                "05": ("#2196F3", "🔍"),
+                "02": ("#1976D2", "🚚"),
+                "80": ("#43A047", "✅"),
+                "90": ("#E53935", "❌"),
+                "03": ("#7B5EA7", "📦"),
+            }
+            _ORDER_LABEL = {
+                "01": "待處理", "02": "配送中", "03": "預留中",
+                "04": "待簽名", "05": "待後台確認",
+                "80": "已完成", "90": "已拒絕",
             }
             # ── 保險待簽名提醒 ──────────────────────────────────────────
-            _pending_sign = [o for o in _quick_orders if o.get("status") == "待簽名" and "保險" in (o.get("goal") or "")]
+            _pending_sign = [o for o in _quick_orders if o.get("status") == "04" and "保險" in (o.get("goal") or "")]
             if not _pending_sign:
                 _all_orders_for_sign = get_my_inquiries(st.session_state.user_id)
-                _pending_sign = [o for o in _all_orders_for_sign if o.get("status") == "待簽名" and "保險" in (o.get("goal") or "")]
+                _pending_sign = [o for o in _all_orders_for_sign if o.get("status") == "04" and "保險" in (o.get("goal") or "")]
             if _pending_sign:
                 _ps = _pending_sign[0]
                 if st.button(
@@ -1249,11 +1254,11 @@ with st.sidebar:
 
             with st.expander("📦 最近訂單", expanded=False):
                 for _qo in _quick_orders:
-                    _qs = _qo.get("status", "待處理")
+                    _qs = _qo.get("status", "01")
                     _qc, _qi = _ORDER_BADGE.get(_qs, ("#888", "❓"))
                     st.markdown(
                         f'<span style="background:{_qc};color:white;border-radius:8px;'
-                        f'padding:1px 7px;font-size:0.72rem;font-weight:700">{_qi} {_qs}</span>'
+                        f'padding:1px 7px;font-size:0.72rem;font-weight:700">{_qi} {_ORDER_LABEL.get(_qs, _qs)}</span>'
                         f' <span style="font-size:0.8rem;color:#444">{_qo.get("goal","")[:14]}</span>',
                         unsafe_allow_html=True,
                     )
@@ -1668,9 +1673,11 @@ elif st.session_state.stage == "inquiry_form":
                         "via":    "mcp.Client",
                     }],
                 })
-                st.session_state.stage           = "chat"
+                st.session_state.stage            = "chat"
                 st.session_state.inquiry_prefill  = {}
                 st.session_state.inquiry_products = []
+                st.session_state.cart             = {}
+                st.session_state.selected_courses = []
                 st.rerun()
             else:
                 st.error(f"❌ 報名失敗：{result.get('message', '請稍後再試')}")
@@ -2028,6 +2035,8 @@ elif st.session_state.stage == "inquiry_form":
                     st.session_state.stage            = "chat"
                     st.session_state.inquiry_prefill  = {}
                     st.session_state.inquiry_products = []
+                    st.session_state.cart             = {}
+                    st.session_state.selected_courses = []
                     st.rerun()
             else:
                 st.error(f"❌ 建立失敗：{result.get('message', '請稍後再試')}")
@@ -2053,20 +2062,21 @@ elif st.session_state.stage == "my_orders":
     st.divider()
 
     STATUS_CFG = {
-        "待處理":   {"color": "#FF9800", "icon": "⏳"},
-        "待簽名":   {"color": "#9C27B0", "icon": "✍️"},
-        "待後台確認": {"color": "#2196F3", "icon": "🔍"},
-        "配送中":   {"color": "#1976D2", "icon": "🚚"},
-        "預留中":   {"color": "#7B5EA7", "icon": "📦"},
-        "已拒絕":   {"color": "#9E9E9E", "icon": "❌"},
-        "已完成":   {"color": "#43A047", "icon": "✅"},
+        "01": {"color": "#FF9800", "icon": "⏳", "label": "待處理"},
+        "04": {"color": "#9C27B0", "icon": "✍️", "label": "待簽名"},
+        "05": {"color": "#2196F3", "icon": "🔍", "label": "待後台確認"},
+        "02": {"color": "#1976D2", "icon": "🚚", "label": "配送中"},
+        "03": {"color": "#7B5EA7", "icon": "📦", "label": "預留中"},
+        "90": {"color": "#9E9E9E", "icon": "❌", "label": "已拒絕"},
+        "80": {"color": "#43A047", "icon": "✅", "label": "已完成"},
     }
+    _STATUS_LABEL = {k: v["label"] for k, v in STATUS_CFG.items()}
 
     if not orders:
         st.info("您目前還沒有任何採買諮詢單。\n\n開始對話並讓 AI 幫您建立採買計劃吧！")
     else:
         for inq in orders:
-            status  = inq.get("status", "待處理")
+            status  = inq.get("status", "01")
             scfg    = STATUS_CFG.get(status, {"color": "#888", "icon": "❓"})
             inq_id  = inq["feedback_no"]
 
@@ -2076,7 +2086,7 @@ elif st.session_state.stage == "my_orders":
                 h1.markdown(
                     f'<span style="background:{scfg["color"]};color:white;'
                     f'border-radius:12px;padding:3px 10px;font-size:0.82rem;font-weight:700">'
-                    f'{scfg["icon"]} {status}</span>',
+                    f'{scfg["icon"]} {_STATUS_LABEL.get(status, status)}</span>',
                     unsafe_allow_html=True,
                 )
                 h2.markdown(f"**`{inq_id}`**")
@@ -2085,11 +2095,11 @@ elif st.session_state.stage == "my_orders":
                 # ── 進度條 ────────────────────────────────────────────────────
                 _is_ins = "保險" in (inq.get("goal") or "")
                 if _is_ins:
-                    _steps = ["待處理", "待簽名", "待後台確認", "已完成"]
+                    _steps = [("01", "待處理"), ("04", "待簽名"), ("05", "待後台確認"), ("80", "已完成")]
                 else:
-                    _steps = ["待處理", "配送中", "已完成"]
-                _step_idx = next((i for i, s in enumerate(_steps) if s == status), -1)
-                if status == "已拒絕":
+                    _steps = [("01", "待處理"), ("02", "配送中"), ("80", "已完成")]
+                _step_idx = next((i for i, (sc, _) in enumerate(_steps) if sc == status), -1)
+                if status == "90":
                     st.markdown(
                         '<div style="background:#f5f5f5;border-radius:8px;padding:6px 12px;'
                         'color:#9E9E9E;font-size:0.8rem;text-align:center">❌ 此申請已拒絕</div>',
@@ -2097,7 +2107,7 @@ elif st.session_state.stage == "my_orders":
                     )
                 elif _step_idx >= 0:
                     _step_html = ""
-                    for _si, _sname in enumerate(_steps):
+                    for _si, (_scode, _sname) in enumerate(_steps):
                         _done  = _si < _step_idx
                         _curr  = _si == _step_idx
                         _bg    = "#43A047" if _done else ("#1976D2" if _curr else "#E0E0E0")
@@ -2129,7 +2139,7 @@ elif st.session_state.stage == "my_orders":
                     if inq.get("note"):
                         st.markdown(f"**備註：** {inq['note']}")
                 with d2:
-                    st.markdown(f"**聯絡人：** {inq.get('contact_name') or '—'}")
+                    st.markdown(f"**聯絡人：** {inq.get('contact_name_display') or inq.get('contact_name') or '—'}")
                     st.markdown(f"**電話：** {inq.get('contact_phone') or '—'}")
 
                 # ── 採買商品清單 ────────────────────────────────────────────
@@ -2172,14 +2182,14 @@ elif st.session_state.stage == "my_orders":
                     expanded=_has_msgs,
                 ):
                     for _line in _v_lines:
-                        if status == "已拒絕" and _v_lines.index(_line) == 0:
+                        if status == "90" and _v_lines.index(_line) == 0:
                             st.warning(f"🏪 商家：{_line}")
                         else:
                             st.info(f"🏪 商家：{_line}")
                     for _line in _u_lines:
                         st.success(f"👤 您：{_line}")
 
-                    if status not in ("已完成",):
+                    if status not in ("80",):
                         st.divider()
                         with st.form(f"user_reply_{inq_id}"):
                             reply_text = st.text_area(
@@ -2199,7 +2209,7 @@ elif st.session_state.stage == "my_orders":
 
                 # ── 保險保單簽名按鈕（待簽名狀態） ─────────────────────────
                 _is_ins_order = "保險" in (inq.get("goal") or "")
-                if _is_ins_order and status == "待簽名":
+                if _is_ins_order and status == "04":
                     st.divider()
                     st.warning("✍️ **保單已準備完成，請點擊下方按鈕閱讀條款並完成電子簽名。**")
                     if st.button(
@@ -2211,7 +2221,7 @@ elif st.session_state.stage == "my_orders":
                         st.session_state.insurance_sign_no = inq_id
                         st.session_state.stage = "insurance_sign"
                         st.rerun()
-                elif _is_ins_order and status == "待後台確認":
+                elif _is_ins_order and status == "05":
                     st.info("🔍 **您的簽名已送出，等待統超保險確認生效中。**")
 
 
@@ -2242,14 +2252,15 @@ elif st.session_state.stage == "insurance_sign":
         st.stop()
 
     _sign_row = dict(_sign_row)
-    if _sign_row.get("status") != "待簽名":
-        st.warning(f"此申請單目前狀態為「{_sign_row.get('status')}」，不需簽名或已完成。")
+    if _sign_row.get("status") != "04":
+        _cur_status_label = {"01":"待處理","02":"配送中","03":"預留中","04":"待簽名","05":"待後台確認","80":"已完成","90":"已拒絕"}.get(_sign_row.get("status",""), _sign_row.get("status",""))
+        st.warning(f"此申請單目前狀態為「{_cur_status_label}」，不需簽名或已完成。")
         if st.button("返回我的訂單"):
             st.session_state.stage = "my_orders"
             st.rerun()
         st.stop()
 
-    st.caption(f"申請單號：`{_sign_inq_id}`　｜　申請人：{_sign_row.get('contact_name','')}")
+    st.caption(f"申請單號：`{_sign_inq_id}`　｜　申請人：{_sign_row.get('contact_name_display') or _sign_row.get('contact_name','')}")
     st.divider()
 
     # ── 正式保單條款 ───────────────────────────────────────────────────────
@@ -2258,7 +2269,7 @@ elif st.session_state.stage == "insurance_sign":
     _policy_text = f"""統超保險旅遊綜合保險保單
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 申請單號：{_sign_inq_id}
-申請人：{_sign_row.get('contact_name','')}
+申請人：{_sign_row.get('contact_name_display') or _sign_row.get('contact_name','')}
 旅遊詳情：{_note_val or '（依申請書所載）'}
 
 【第一條 承保範圍】
@@ -2378,7 +2389,7 @@ elif st.session_state.stage == "insurance_sign":
 
             _scon = _db()
             _scon.execute(
-                "UPDATE pms_form_feedback SET status='待後台確認', images_json=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                "UPDATE pms_form_feedback SET status='05', images_json=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
                 (
                     json.dumps([_sig_path_s] if _sig_path_s else [], ensure_ascii=False),
                     f"{datetime.now().strftime('%m/%d %H:%M')} [用戶]: 已完成電子簽名，等待保單生效確認。\n",
@@ -2424,7 +2435,7 @@ elif st.session_state.stage == "chat":
         st.session_state.selected_courses = _sc2
         del st.query_params["rm_course"]
         st.rerun()
-    _adc = st.query_params.get("add_cart", "")
+    _adc = st.session_state.get("_add_cart_sig", "")
     if _adc:
         _cat = st.session_state.get("product_catalog", {})
         _prod = _cat.get(_adc, {})
@@ -2444,9 +2455,9 @@ elif st.session_state.stage == "chat":
                     "emoji":     _product_emoji(_adc),
                 }
             st.session_state.cart = _c2
-        del st.query_params["add_cart"]
+        st.session_state["_add_cart_sig"] = ""
         st.rerun()
-    _togc = st.query_params.get("tog_course", "")
+    _togc = st.session_state.get("_tog_course_sig", "")
     if _togc:
         _sc3 = list(st.session_state.get("selected_courses", []))
         if _togc in _sc3:
@@ -2454,7 +2465,7 @@ elif st.session_state.stage == "chat":
         else:
             _sc3.append(_togc)
         st.session_state.selected_courses = _sc3
-        del st.query_params["tog_course"]
+        st.session_state["_tog_course_sig"] = ""
         st.rerun()
 
     using_claude = bool(st.session_state.api_key)
@@ -2619,7 +2630,37 @@ elif st.session_state.stage == "chat":
 .cpill-gym .rm{font-size:11px;font-weight:700;opacity:.6;line-height:1;
                padding:0 2px;text-decoration:none;color:inherit;}
 .cpill-gym .rm:hover{opacity:1;}
+div[data-testid="stTextInput"]:has(input[placeholder^="__"]){height:0!important;overflow:hidden!important;
+  padding:0!important;margin:0!important;min-height:0!important;}
+div[data-testid="stTextInput"]:has(input[placeholder^="__"]) input{position:absolute!important;
+  left:-9999px!important;opacity:0!important;pointer-events:none!important;}
 </style>""", unsafe_allow_html=True)
+    st.text_input("_add", placeholder="__add_cart__",   key="_add_cart_sig",   label_visibility="collapsed")
+    st.text_input("_tog", placeholder="__tog_course__", key="_tog_course_sig", label_visibility="collapsed")
+    import streamlit.components.v1 as _stc
+    _stc.html("""<script>
+(function(){
+  try {
+    var p=window.parent;
+    if(p._stClickHandler){p.document.removeEventListener('click',p._stClickHandler);}
+    p._stClickHandler=function(e){
+      var btn=e.target.closest('[data-ph]');
+      if(!btn)return;
+      var ph=btn.getAttribute('data-ph');
+      var val=btn.getAttribute('data-name')||'';
+      var el=p.document.querySelector('input[placeholder="'+ph+'"]');
+      if(!el)return;
+      var s=Object.getOwnPropertyDescriptor(p.HTMLInputElement.prototype,'value').set;
+      s.call(el,val);
+      el.dispatchEvent(new Event('input',{bubbles:true}));
+      el.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13}));
+      el.dispatchEvent(new KeyboardEvent('keypress',{bubbles:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13}));
+      el.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,cancelable:true,key:'Enter',code:'Enter',keyCode:13}));
+    };
+    p.document.addEventListener('click',p._stClickHandler);
+  } catch(err) {}
+})();
+</script>""", height=1)
 
     # ── 已選商品 Pills（橫向滑動，✕ 內嵌，帶 emoji）────────────
     if _cart:
@@ -2644,12 +2685,6 @@ elif st.session_state.stage == "chat":
                     f'<a href="?rm_course={_qe(_cn)}" class="rm">✕</a></span>')
         _gh += '</div>'
         st.markdown(_gh, unsafe_allow_html=True)
-        _enroll_label = f"✅ 確認報名（{len(_sel_courses)} 堂課）"
-        if st.button(_enroll_label, type="primary", use_container_width=True, key="course_enroll_submit"):
-            _names = "、".join(_sel_courses)
-            st.session_state["_pending_prompt"] = f"我要報名 {_names}"
-            st.session_state.selected_courses = []
-            st.rerun()
 
     # ── 3. 接收新輸入 ───────────────────────────────────────────────
     _ep = st.session_state.get("_pending_prompt")
@@ -2658,34 +2693,6 @@ elif st.session_state.stage == "chat":
     _ci = st.chat_input("輸入您的需求或回覆...")
     prompt = _ep or _ci
     if prompt:
-        # 下單意圖偵測：有購物車時攔截，直接跳表單
-        _ORDER_KWS = ["訂購這些", "下單這些", "買這些", "購買這些", "我要這些", "確認購買", "幫我訂這些", "下單了"]
-        if any(kw in prompt for kw in _ORDER_KWS) and st.session_state.get("cart"):
-            _ocart = st.session_state.cart
-            _olist = [
-                {"name": n, "vendor": v.get("vendor",""), "price": v["price"], "qty": v["qty"]}
-                for n, v in _ocart.items()
-            ]
-            # 從 mcp_log 回溯最近一次推薦/搜尋的 budget、goal、keyword
-            _last_budget, _last_goal, _last_kw = 0, "商品採買", ""
-            for _ml in reversed(st.session_state.get("mcp_log", [])):
-                if _ml["tool"] in ("recommend_high_protein", "search_grocery"):
-                    _last_budget = int(_ml.get("params", {}).get("budget", 0) or 0)
-                    _last_goal   = _ml.get("params", {}).get("goal", "商品採買") or "商品採買"
-                    _last_kw     = _ml.get("params", {}).get("keyword", "") or ""
-                    break
-            st.session_state.inquiry_prefill = {
-                "goal":          _last_goal,
-                "contact_name":  st.session_state.get("username", ""),
-                "contact_phone": st.session_state.get("user_contact_phone", ""),
-                "address":       st.session_state.get("user_address", ""),
-                "budget":        _last_budget,
-                "keyword":       _last_kw,
-                "products_json": json.dumps(_olist, ensure_ascii=False),
-            }
-            st.session_state.inquiry_products = list(_ocart.values())
-            st.session_state.stage = "inquiry_form"
-            st.rerun()
         with st.chat_message("user", avatar="👤"):
             st.markdown(prompt)
 
@@ -2694,7 +2701,18 @@ elif st.session_state.stage == "chat":
 
         with st.chat_message("assistant", avatar="🌿"):
             if using_claude:
-                st.session_state.claude_msgs.append({"role": "user", "content": prompt})
+                _ai_content = prompt
+                _cart_now = st.session_state.get("cart", {})
+                if _cart_now:
+                    _cart_lines = "、".join(
+                        f"{n}×{v['qty']}（${v['price']*v['qty']}）"
+                        for n, v in _cart_now.items()
+                    )
+                    _ai_content += f"\n\n[系統：使用者已透過 UI 加入購物車：{_cart_lines}，若使用者表達購買/下單意圖請呼叫 submit_inquiry 並帶入這些商品]"
+                _sel = st.session_state.get("selected_courses", [])
+                if _sel:
+                    _ai_content += f"\n\n[系統：使用者已透過 UI 選取課程：{'、'.join(_sel)}，若使用者表達報名意圖請呼叫 enroll_gym_course]"
+                st.session_state.claude_msgs.append({"role": "user", "content": _ai_content})
                 text = ""
                 tool_calls = []
                 with st.spinner("🤔 思考中..."):
@@ -2726,8 +2744,19 @@ elif st.session_state.stage == "chat":
             else:
                 _spin_label = "🤖 GPT-4o 透過 MCP 思考中..." if using_gpt else f"🤖 {OLLAMA_MODEL} 透過 MCP 思考中..."
                 with st.spinner(_spin_label):
+                    _ol_prompt = prompt
+                    _cart_ol = st.session_state.get("cart", {})
+                    if _cart_ol:
+                        _cart_lines_ol = "、".join(
+                            f"{n}×{v['qty']}（${v['price']*v['qty']}）"
+                            for n, v in _cart_ol.items()
+                        )
+                        _ol_prompt += f"\n\n[系統：使用者已透過 UI 加入購物車：{_cart_lines_ol}，若使用者表達購買/下單意圖請呼叫 submit_inquiry 並帶入這些商品]"
+                    _sel2 = st.session_state.get("selected_courses", [])
+                    if _sel2:
+                        _ol_prompt += f"\n\n[系統：使用者已透過 UI 選取課程：{'、'.join(_sel2)}，若使用者表達報名意圖請呼叫 enroll_gym_course]"
                     text, tool_calls, updated_history = ollama_chat(
-                        prompt, st.session_state.ollama_history
+                        _ol_prompt, st.session_state.ollama_history
                     )
                     st.session_state.ollama_history = updated_history
                 if st.session_state.stage == "inquiry_form":

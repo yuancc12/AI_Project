@@ -38,14 +38,15 @@ CAT_ICON = {
     "咖啡": "☕", "酒類": "🍺", "有機食品": "🌿",
 }
 STATUS_CFG = {
-    "待處理":   {"color": "#FF9800", "icon": "⏳"},
-    "待簽名":   {"color": "#9C27B0", "icon": "✍️"},
-    "待後台確認": {"color": "#2196F3", "icon": "🔍"},
-    "預留中":   {"color": "#7B5EA7", "icon": "📦"},
-    "配送中":   {"color": "#1976D2", "icon": "🚚"},
-    "已拒絕":   {"color": "#9E9E9E", "icon": "❌"},
-    "已完成":   {"color": "#43A047", "icon": "✅"},
+    "01": {"label": "待處理",    "color": "#FF9800", "icon": "⏳"},
+    "02": {"label": "配送中",    "color": "#1976D2", "icon": "🚚"},
+    "03": {"label": "預留中",    "color": "#7B5EA7", "icon": "📦"},
+    "04": {"label": "待簽名",    "color": "#9C27B0", "icon": "✍️"},
+    "05": {"label": "待後台確認", "color": "#2196F3", "icon": "🔍"},
+    "80": {"label": "已完成",    "color": "#43A047", "icon": "✅"},
+    "90": {"label": "已拒絕",    "color": "#9E9E9E", "icon": "❌"},
 }
+STATUS_LABEL = {k: v["label"] for k, v in STATUS_CFG.items()}
 DELIVERY_TYPE_CFG = {
     "外送": {"color": "#1976D2", "icon": "🚚", "label": "外送"},
     "自取": {"color": "#43A047", "icon": "🏃", "label": "自取"},
@@ -85,7 +86,7 @@ MCP_TOOLS = [
     {
         "no": 4, "name": "submit_inquiry",
         "type": "🔴 寫入", "caller": "前端 AI（用戶確認後）",
-        "desc": "將用戶需求寫入後台諮詢單（pms_form_feedback 表），產生諮詢單號 FB...，支援採買 / 旅遊保險 / 搬家 / 理財等所有 goal 類型。products_json 只放用戶明確指定的商品。",
+        "desc": "將用戶需求寫入後台諮詢單（pms_form_feedback 表），產生諮詢單號 YYMMDD+8位數字...，支援採買 / 旅遊保險 / 搬家 / 理財等所有 goal 類型。products_json 只放用戶明確指定的商品。",
         "trigger": "用戶同意 → AI 收集姓名電話 → 再次確認 → 透過 mcp.Client 呼叫，嚴禁未確認就寫入。",
     },
     {
@@ -150,7 +151,7 @@ MCP_TOOLS = [
     {
         "no": 14, "name": "enroll_gym_course",
         "type": "🔴 寫入", "caller": "前端 AI（用戶確認後）",
-        "desc": "報名 Being Sport 健身課程，同時建立諮詢單（FB...）與報名紀錄（course_enrollment），並更新課程已報名人數。人數達最低開課門檻時回傳提示。支援多課程一張諮詢單（course_names_json 參數）。",
+        "desc": "報名 Being Sport 健身課程，同時建立諮詢單（YYMMDD+8位數字...）與報名紀錄（course_enrollment），並更新課程已報名人數。人數達最低開課門檻時回傳提示。支援多課程一張諮詢單（course_names_json 參數）。",
         "trigger": "用戶確認要報名某課程，AI 收集姓名與電話後呼叫；嚴禁未確認就寫入。",
     },
     {
@@ -211,7 +212,7 @@ OLLAMA_MODEL = "qwen2.5:7b"
 
 ADMIN_SYSTEM = """\
 你是「後台採買管理助手」，協助後台人員處理健康採買諮詢單的派送事宜。
-當後台人員提供諮詢單號（如 FB260708XXXXXX）和廠商名稱後，立即呼叫 dispatch_delivery 工具建立外送訂單，不需要再詢問確認。
+當後台人員提供諮詢單號（如 2607080000XXXX）和廠商名稱後，立即呼叫 dispatch_delivery 工具建立外送訂單，不需要再詢問確認。
 語言：繁體中文，語氣專業。執行完後再回報結果。\
 """
 
@@ -224,7 +225,7 @@ ADMIN_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "inquiry_no":        {"type": "string",  "description": "諮詢單編號，例如「FB260708XXXXXX」"},
+                    "inquiry_no":        {"type": "string",  "description": "諮詢單編號，例如「2607080000XXXX」"},
                     "vendor_name":       {"type": "string",  "description": "接單廠商或門市，例如「萬家福信義店」"},
                     "estimated_minutes": {"type": "integer", "description": "預計送達分鐘數，預設 60"},
                     "reply_message":     {"type": "string",  "description": "廠商給用戶的回覆訊息（選填）"},
@@ -455,8 +456,8 @@ def get_stats(vendor: str = ""):
     low_stock    = con.execute(f"SELECT COUNT(*) FROM fitness_product{cond} {'AND' if vendor else 'WHERE'} stock>0 AND stock<=30",
                                params).fetchone()[0]
     avg_protein  = con.execute(f"SELECT AVG(protein_g) FROM fitness_product{cond}", params).fetchone()[0] or 0
-    pending      = con.execute("SELECT COUNT(*) FROM pms_form_feedback WHERE status='待處理'").fetchone()[0]
-    delivering   = con.execute("SELECT COUNT(*) FROM pms_form_feedback WHERE status='配送中'").fetchone()[0]
+    pending      = con.execute("SELECT COUNT(*) FROM pms_form_feedback WHERE status='01'").fetchone()[0]
+    delivering   = con.execute("SELECT COUNT(*) FROM pms_form_feedback WHERE status='02'").fetchone()[0]
     con.close()
     return total, out_of_stock, low_stock, round(avg_protein, 1), pending, delivering
 
@@ -577,12 +578,12 @@ def get_inquiries(status_filter=None, store_name=None, brand=None, is_gym=False,
             # 顯示：已派給本門市 OR (待處理 AND 商品清單含有本品牌商品)
             conditions.append(
                 "(vendor_reply LIKE ? OR "
-                "(status='待處理' AND products_json LIKE ?))"
+                "(status='01' AND products_json LIKE ?))"
             )
             params.append(f"%{store_name}%")
             params.append(f'%"vendor": "{brand}"%')
         else:
-            conditions.append("(status='待處理' OR vendor_reply LIKE ?)")
+            conditions.append("(status='01' OR vendor_reply LIKE ?)")
             params.append(f"%{store_name}%")
     sql = "SELECT * FROM pms_form_feedback"
     if conditions:
@@ -597,7 +598,7 @@ def reject_inquiry(feedback_no, reason, store_name=""):
     prefix = f"[{store_name}] " if store_name else ""
     con = _db()
     con.execute(
-        "UPDATE pms_form_feedback SET status='已拒絕', vendor_reply=? WHERE feedback_no=?",
+        "UPDATE pms_form_feedback SET status='90', vendor_reply=? WHERE feedback_no=?",
         (f"{prefix}{reason}", feedback_no),
     )
     con.commit()
@@ -612,7 +613,7 @@ def reserve_inquiry(feedback_no, store_name, note=""):
     if note:
         msg += f" 備注：{note}"
     con.execute(
-        "UPDATE pms_form_feedback SET status='預留中', accepted_at=?, vendor_reply=? WHERE feedback_no=?",
+        "UPDATE pms_form_feedback SET status='03', accepted_at=?, vendor_reply=? WHERE feedback_no=?",
         (now_iso, msg, feedback_no),
     )
     con.commit()
@@ -650,8 +651,8 @@ def get_active_deliveries():
     """取得所有待取件或配送中的外送單（status 01 或 02），含聯絡資訊與完整地址。"""
     con = _db()
     rows = con.execute("""
-        SELECT m.*, f.contact_name, f.contact_phone, f.address,
-               f.products_json, f.goal, f.contact_name as recipient,
+        SELECT m.*, f.contact_name_display as contact_name, f.contact_phone, f.address,
+               f.products_json, f.goal, f.contact_name_display as recipient,
                c.name as county_name, d.name as district_name
         FROM mms_order_record m
         JOIN pms_form_feedback f ON m.feedback_no = f.feedback_no
@@ -758,13 +759,13 @@ def open_course_and_notify(course_id: int) -> int:
         )
         if r.get("feedback_no"):
             con.execute(
-                "UPDATE pms_form_feedback SET vendor_reply=?, status='已完成' WHERE feedback_no=?",
+                "UPDATE pms_form_feedback SET vendor_reply=?, status='80' WHERE feedback_no=?",
                 (f"🎉 恭喜！您報名的課程已確認開課！請依課程時間準時出席。（{now_iso[:16]}）",
                  r["feedback_no"]),
             )
             # 發開課 Email
             fb = con.execute(
-                "SELECT user_id, contact_name FROM pms_form_feedback WHERE feedback_no=?",
+                "SELECT user_id, contact_name_display FROM pms_form_feedback WHERE feedback_no=?",
                 (r["feedback_no"],)
             ).fetchone()
             if fb and fb["user_id"]:
@@ -805,7 +806,7 @@ def cancel_course(course_id: int):
         )
         if r.get("feedback_no"):
             con.execute(
-                "UPDATE pms_form_feedback SET vendor_reply=?, status='已拒絕' WHERE feedback_no=?",
+                "UPDATE pms_form_feedback SET vendor_reply=?, status='90' WHERE feedback_no=?",
                 (f"⚠️ 很遺憾，您報名的課程因故取消，如需協助請聯繫門市。（{now_iso[:16]}）",
                  r["feedback_no"]),
             )
@@ -850,12 +851,12 @@ def update_delivery_status(order_no: str, new_status: str, driver_name: str = ""
             ).fetchone()[0]
             if pending == 0:
                 con.execute(
-                    "UPDATE pms_form_feedback SET status='已完成' WHERE feedback_no=?",
+                    "UPDATE pms_form_feedback SET status='80' WHERE feedback_no=?",
                     (fno,)
                 )
             # 發送送達通知 Email
             fb = con.execute(
-                "SELECT user_id, contact_name FROM pms_form_feedback WHERE feedback_no=?",
+                "SELECT user_id, contact_name_display FROM pms_form_feedback WHERE feedback_no=?",
                 (fno,)
             ).fetchone()
             if fb and fb["user_id"]:

@@ -11,7 +11,7 @@ from datetime import datetime
 
 _null = contextlib.nullcontext()
 from vendor_helpers import (
-    DB, VENDOR_COLOR, CAT_ICON, STATUS_CFG, DELIVERY_TYPE_CFG,
+    DB, VENDOR_COLOR, CAT_ICON, STATUS_CFG, STATUS_LABEL, DELIVERY_TYPE_CFG,
     DELIVERY_COMPANIES, DELIVERY_ICON, MCP_TOOLS,
     _db, get_stats, get_chart_data, get_products, update_stock, insert_product, delete_product,
     get_inquiries, reject_inquiry, reserve_inquiry,
@@ -91,9 +91,7 @@ if _col_out.button("登出", key="v_logout"):
     for _k in ["vendor_id", "vendor_store", "vendor_brand"]:
         st.session_state[_k] = None
     st.rerun()
-_hcap, _hauto = st.columns([5, 1])
-_hcap.caption("統一集團 × MCP Server ✦ 商品庫存 · 採買諮詢 · 外送派送 ｜ 後台 AI + mcp.Client")
-_auto_refresh = _hauto.toggle("🔄 自動刷新", value=st.session_state.get("auto_refresh", False), key="auto_refresh")
+st.caption("統一集團 × MCP Server ✦ 商品庫存 · 採買諮詢 · 外送派送 ｜ 後台 AI + mcp.Client")
 
 # ── 品牌判斷（頁籤與統計共用） ────────────────────────────────────────────────
 
@@ -109,6 +107,17 @@ _is_finance     = _brand_v == "金融"
 
 _stat_vendor = "" if _is_admin_v else (_brand_v if _brand_v not in ("全部", "外送員", "健身房", "保險", "金融") else "")
 total, out_of_stock, low_stock_count, avg_protein, pending, delivering = get_stats(_stat_vendor)
+# 外送員：metrics 來自 mms_order_record，不是 pms_form_feedback
+if _is_driver:
+    _dcon = _db()
+    pending    = _dcon.execute("SELECT COUNT(*) FROM mms_order_record WHERE status='01'").fetchone()[0]
+    delivering = _dcon.execute("SELECT COUNT(*) FROM mms_order_record WHERE status='02'").fetchone()[0]
+    _dcon.close()
+# 其他非 admin：用 get_inquiries 算出實際可見的待處理/配送中筆數，確保數字與清單一致
+elif not _is_admin_v:
+    _vs = st.session_state.get("vendor_store", "")
+    pending    = len(get_inquiries("01", _vs, brand=_brand_v, is_gym=_is_gym_only, is_insurance=_is_insurance, is_finance=_is_finance))
+    delivering = len(get_inquiries("02", _vs, brand=_brand_v, is_gym=_is_gym_only, is_insurance=_is_insurance, is_finance=_is_finance))
 
 # ── 新單通知 ──────────────────────────────────────────────────────────────────
 if "last_known_pending" not in st.session_state:
@@ -383,31 +392,31 @@ with (tab2 if tab2 is not None else _null):
         st.markdown("#### 用戶透過 AI 助手提交的採買諮詢，在此確認接單或拒絕並派送。")
         st.caption("派送操作透過 **mcp.Client** 真實呼叫 `dispatch_delivery` MCP 工具。")
 
-    _SICON = {"全部": "📋", "待處理": "⏳", "待簽名": "✍️", "待後台確認": "🔍", "配送中": "🚚", "預留中": "📦", "已拒絕": "❌", "已完成": "✅"}
+    _SICON = {"全部": "📋", "01": "⏳", "04": "✍️", "05": "🔍", "02": "🚚", "03": "📦", "90": "❌", "80": "✅"}
     if _is_insurance:
-        status_opts = ["全部", "待處理", "待簽名", "待後台確認", "已拒絕", "已完成"]
+        status_opts = ["全部", "01", "04", "05", "90", "80"]
     elif _is_finance or _is_gym_only:
-        status_opts = ["全部", "待處理", "已拒絕", "已完成"]
+        status_opts = ["全部", "01", "90", "80"]
     else:
-        status_opts = ["全部", "待處理", "配送中", "預留中", "已拒絕", "已完成"]
+        status_opts = ["全部", "01", "02", "03", "90", "80"]
     _rf_col, _sel_col = st.columns([1, 8])
     if _rf_col.button("🔄", key="inq_refresh", help="重新整理"):
         st.rerun()
     sel_status = _sel_col.radio(
         "狀態篩選", status_opts,
-        format_func=lambda s: f"{_SICON.get(s, '')} {s}",
+        format_func=lambda s: f"{_SICON.get(s, '')} {STATUS_LABEL.get(s, s)}",
         horizontal=True, key="inq_status", label_visibility="collapsed",
     )
 
     inquiries = get_inquiries(sel_status, st.session_state.get("vendor_store"), brand=_brand_v, is_gym=_is_gym_only, is_insurance=_is_insurance, is_finance=_is_finance)
-    st.caption(f"共 {len(inquiries)} 筆{'（' + sel_status + '）' if sel_status != '全部' else ''}")
+    st.caption(f"共 {len(inquiries)} 筆{'（' + STATUS_LABEL.get(sel_status, sel_status) + '）' if sel_status != '全部' else ''}")
     st.divider()
 
     if not inquiries:
         st.info("目前沒有符合條件的諮詢單。")
     else:
         for inq in inquiries:
-            status   = inq.get("status", "待處理")
+            status   = inq.get("status", "01")
             scfg     = STATUS_CFG.get(status, {"color": "#888", "icon": "❓"})
             s_icon   = scfg["icon"]
             s_color  = scfg["color"]
@@ -442,7 +451,7 @@ with (tab2 if tab2 is not None else _null):
                     f'display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
                     f'<span style="background:{s_color};color:white;border-radius:12px;'
                     f'padding:3px 10px;font-size:0.82rem;font-weight:700;white-space:nowrap">'
-                    f'{s_icon} {status}</span>'
+                    f'{s_icon} {STATUS_LABEL.get(status, status)}</span>'
                     f'{_dtype_badge}'
                     f'<span style="font-weight:700;font-family:monospace;font-size:0.9rem">{inq_id}</span>'
                     f'<span style="margin-left:auto;color:#888;font-size:0.78rem">'
@@ -475,7 +484,7 @@ with (tab2 if tab2 is not None else _null):
                         st.caption(f"備註：{inq['note']}")
                 with d2:
                     st.markdown("**👤 聯絡人**")
-                    st.markdown(inq.get("contact_name") or "—")
+                    st.markdown(inq.get("contact_name_display") or inq.get("contact_name") or "—")
                     st.caption(f"📞 {inq.get('contact_phone') or '—'}")
                 with d3:
                     budget_val = inq.get("budget") or 0
@@ -491,8 +500,13 @@ with (tab2 if tab2 is not None else _null):
                             by_v: dict = {}
                             for p in plist:
                                 by_v.setdefault(p.get("vendor", "其他"), []).append(p)
+                            # 非 admin 只顯示本品牌商品
+                            if not _is_admin_v:
+                                by_v = {v: items for v, items in by_v.items() if v == _brand_v}
                             total_items = sum(len(v) for v in by_v.values())
-                            with st.expander(f"📦 推薦商品清單（{total_items} 項 / {len(by_v)} 通路）"):
+                            _other_cnt = len(json.loads(pj)) - total_items if not _is_admin_v else 0
+                            _other_hint = f"，其他通路 {_other_cnt} 項由各通路分別處理" if _other_cnt > 0 else ""
+                            with st.expander(f"📦 {'本通路' if not _is_admin_v else ''}商品清單（{total_items} 項{_other_hint}）"):
                                 for vendor, items in by_v.items():
                                     color = VENDOR_COLOR.get(vendor, "#888")
                                     st.markdown(
@@ -554,11 +568,11 @@ with (tab2 if tab2 is not None else _null):
                                 _icols[_ii % 3].caption(f"📎 {_ip}")
 
                 # ── 保險申請：四步流程操作 ─────────────────────────────────
-                if _is_ins_inq and _is_insurance and status not in ("已完成", "已拒絕"):
+                if _is_ins_inq and _is_insurance and status not in ("80", "90"):
                     st.divider()
                     st.markdown("#### 📋 保單操作")
 
-                    if status == "待處理":
+                    if status == "01":
                         # Step 1: 後台審核 → 發送保單給用戶簽名
                         st.info("📋 請確認申請內容後，點擊「發送保單」產生正式保單供用戶電子簽名。")
                         _ins_b1, _ins_b2 = st.columns(2)
@@ -569,7 +583,7 @@ with (tab2 if tab2 is not None else _null):
 
                         if st.session_state.get(f"ins_act_{inq_id}") == "send":
                             _contract_preview = f"""統超保險旅遊綜合保險保單
-申請單號：{inq_id}　　申請人：{inq.get('contact_name','')}
+申請單號：{inq_id}　　申請人：{inq.get('contact_name_display') or inq.get('contact_name','')}
 
 【承保範圍】
 ・意外死亡及傷殘保險金（最高 NT$300 萬）
@@ -609,7 +623,7 @@ with (tab2 if tab2 is not None else _null):
                                 if _extra_note:
                                     _msg += f"{_now_str} [統超保險]: {_extra_note}\n"
                                 _idb.execute(
-                                    "UPDATE pms_form_feedback SET status='待簽名', accepted_at=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                                    "UPDATE pms_form_feedback SET status='04', accepted_at=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
                                     (datetime.now().isoformat(), _msg, inq_id),
                                 )
                                 _idb.commit()
@@ -651,7 +665,7 @@ with (tab2 if tab2 is not None else _null):
                             if _do_rj:
                                 _idb = _db()
                                 _idb.execute(
-                                    "UPDATE pms_form_feedback SET status='已拒絕', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                                    "UPDATE pms_form_feedback SET status='90', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
                                     (f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: {_rj_reason or '申請未通過審核，如有疑問請聯繫統超保險經紀人。'}\n", inq_id),
                                 )
                                 _idb.commit(); _idb.close()
@@ -662,26 +676,26 @@ with (tab2 if tab2 is not None else _null):
                                 st.session_state.pop(f"ins_act_{inq_id}", None)
                                 st.rerun()
 
-                    elif status == "待簽名":
+                    elif status == "04":
                         # Step 2: Waiting for user to sign
                         st.warning("⏳ 等待用戶登入並簽署保單中...")
                         if st.button("↩️ 撤回保單（重設為待處理）", key=f"ins_recall_{inq_id}", use_container_width=True):
                             _idb = _db()
                             _idb.execute(
-                                "UPDATE pms_form_feedback SET status='待處理', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                                "UPDATE pms_form_feedback SET status='01', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
                                 (f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: 保單已撤回，請重新申請或聯繫客服。\n", inq_id),
                             )
                             _idb.commit(); _idb.close()
                             st.rerun()
 
-                    elif status == "待後台確認":
+                    elif status == "05":
                         # Step 3: User signed, backend confirms
                         st.success("✅ 用戶已完成電子簽名，請確認後使保單生效。")
                         _ins_c1, _ins_c2 = st.columns(2)
                         if _ins_c1.button("✅ 確認生效", key=f"ins_approve_{inq_id}", type="primary", use_container_width=True):
                             _idb = _db()
                             _idb.execute(
-                                "UPDATE pms_form_feedback SET status='已完成', accepted_at=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                                "UPDATE pms_form_feedback SET status='80', accepted_at=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
                                 (datetime.now().isoformat(),
                                  f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: 保單已確認生效，電子保單將另行寄送至您的信箱。\n",
                                  inq_id),
@@ -710,7 +724,7 @@ with (tab2 if tab2 is not None else _null):
                         if _ins_c2.button("❌ 拒絕申請", key=f"ins_reject_{inq_id}", use_container_width=True):
                             _idb = _db()
                             _idb.execute(
-                                "UPDATE pms_form_feedback SET status='已拒絕', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                                "UPDATE pms_form_feedback SET status='90', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
                                 (f"{datetime.now().strftime('%m/%d %H:%M')} [統超保險]: 申請未通過審核，如有疑問請聯繫統超保險經紀人。\n", inq_id),
                             )
                             _idb.commit(); _idb.close()
@@ -744,7 +758,7 @@ with (tab2 if tab2 is not None else _null):
                         for _ts, _role, _content in _all_msgs:
                             if _role == "vendor":
                                 with st.chat_message("assistant"):
-                                    if status == "已拒絕" and _all_msgs.index((_ts, _role, _content)) == 0:
+                                    if status == "90" and _all_msgs.index((_ts, _role, _content)) == 0:
                                         st.error(_content)
                                     else:
                                         st.write(_content)
@@ -783,14 +797,14 @@ with (tab2 if tab2 is not None else _null):
                 )
 
                 # ── 理財諮詢：專屬操作區 ────────────────────────────────────
-                if _is_finance and status not in ("已完成", "已拒絕"):
+                if _is_finance and status not in ("80", "90"):
                     st.divider()
                     st.markdown("#### 💰 理財諮詢操作")
                     _fc1, _fc2 = st.columns(2)
                     if _fc1.button("✅ 已安排專員聯繫，標記完成", key=f"fin_done_{inq_id}", type="primary", use_container_width=True):
                         _fdb = _db()
                         _fdb.execute(
-                            "UPDATE pms_form_feedback SET status='已完成', accepted_at=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                            "UPDATE pms_form_feedback SET status='80', accepted_at=?, vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
                             (datetime.now().isoformat(),
                              f"{datetime.now().strftime('%m/%d %H:%M')} [統一證券]: 已安排專員與您聯繫，感謝您的查詢。\n",
                              inq_id),
@@ -817,16 +831,16 @@ with (tab2 if tab2 is not None else _null):
                     if _fc2.button("❌ 拒絕申請", key=f"fin_rej_{inq_id}", use_container_width=True):
                         _fdb = _db()
                         _fdb.execute(
-                            "UPDATE pms_form_feedback SET status='已拒絕', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
+                            "UPDATE pms_form_feedback SET status='90', vendor_reply=COALESCE(vendor_reply,'')||? WHERE feedback_no=?",
                             (f"{datetime.now().strftime('%m/%d %H:%M')} [統一證券]: 很抱歉，目前無法受理此諮詢申請。\n", inq_id),
                         )
                         _fdb.commit(); _fdb.close()
                         st.warning(f"諮詢 {inq_id} 已拒絕。")
                         st.rerun()
 
-                if not _is_finance and status not in ("已拒絕", "已完成", "待簽名", "待後台確認") and not _already_this_vendor and not (_is_ins_inq and _is_insurance):
+                if not _is_finance and status not in ("90", "80", "04", "05") and not _already_this_vendor and not (_is_ins_inq and _is_insurance):
                     st.divider()
-                    if status == "待處理":
+                    if status == "01":
                         if _dtype == "自取":
                             b1, b2, b3 = st.columns([2, 2, 3])
                             if b1.button("📦 預留商品", key=f"rsv_{inq['id']}", type="primary"):
@@ -839,13 +853,13 @@ with (tab2 if tab2 is not None else _null):
                                 st.session_state[f"act_{inq_id}"] = "accept"
                             if b2.button("❌ 拒絕", key=f"rej_{inq['id']}"):
                                 st.session_state[f"act_{inq_id}"] = "reject"
-                    elif status == "配送中":
+                    elif status == "02":
                         if st.button(
                             f"📦 加入配送（{_vendor_brand} 本通路商品）",
                             key=f"join_{inq['id']}", type="secondary",
                         ):
                             st.session_state[f"act_{inq_id}"] = "accept"
-                    elif status == "預留中":
+                    elif status == "03":
                         if st.button("✅ 確認顧客已取件", key=f"done_{inq['id']}", type="primary"):
                             st.session_state[f"act_{inq_id}"] = "complete"
 
@@ -874,7 +888,7 @@ with (tab2 if tab2 is not None else _null):
                                 _kw_e  = inq.get("keyword", "")
                                 _ec = _db()
                                 _ec.execute(
-                                    "UPDATE pms_form_feedback SET status='已完成', vendor_reply=?, accepted_at=? WHERE feedback_no=?",
+                                    "UPDATE pms_form_feedback SET status='80', vendor_reply=?, accepted_at=? WHERE feedback_no=?",
                                     (v_reply, _now_e, inq_id),
                                 )
                                 if _kw_e:
@@ -895,7 +909,7 @@ with (tab2 if tab2 is not None else _null):
                                 _ec.commit()
                                 # 發報名確認 Email
                                 _fb_row = _ec.execute(
-                                    "SELECT user_id, contact_name FROM pms_form_feedback WHERE feedback_no=?",
+                                    "SELECT user_id, contact_name_display FROM pms_form_feedback WHERE feedback_no=?",
                                     (inq_id,)
                                 ).fetchone()
                                 if _fb_row and _fb_row["user_id"]:
@@ -1069,7 +1083,7 @@ with (tab2 if tab2 is not None else _null):
                     elif action == "complete":
                         con = _db()
                         con.execute(
-                            "UPDATE pms_form_feedback SET status='已完成' WHERE feedback_no=?",
+                            "UPDATE pms_form_feedback SET status='80' WHERE feedback_no=?",
                             (inq_id,),
                         )
                         con.commit(); con.close()
@@ -1078,7 +1092,7 @@ with (tab2 if tab2 is not None else _null):
                         st.rerun()
 
                     # ── 拒絕表單（只有待處理才能拒絕）──────────────────────
-                    elif action == "reject" and status == "待處理":
+                    elif action == "reject" and status == "01":
                         with st.form(f"rej_form_{inq_id}"):
                             st.markdown("**確認拒絕此諮詢單**")
                             r_reason = st.text_area("拒絕原因", placeholder="例：目前庫存不足，建議下週再訂", key=f"r_reason_{inq_id}")
@@ -1097,16 +1111,16 @@ with (tab2 if tab2 is not None else _null):
                             st.rerun()
 
                 # ── 手動改變狀態（所有非終態訂單皆可操作）──────────────────
-                if status not in ("已完成", "已拒絕"):
+                if status not in ("80", "90"):
                     with st.expander("⚙️ 手動變更狀態", expanded=False):
                         _status_options = {
-                            "待處理":   "⏳ 待處理",
-                            "待簽名":   "✍️ 待簽名（等待用戶簽署）",
-                            "待後台確認": "🔍 待後台確認（用戶已簽名）",
-                            "預留中":   "📦 預留中（等待自取）",
-                            "配送中":   "🚚 配送中",
-                            "已完成":   "✅ 已完成",
-                            "已拒絕":   "❌ 已拒絕",
+                            "01": "⏳ 待處理",
+                            "04": "✍️ 待簽名（等待用戶簽署）",
+                            "05": "🔍 待後台確認（用戶已簽名）",
+                            "03": "📦 預留中（等待自取）",
+                            "02": "🚚 配送中",
+                            "80": "✅ 已完成",
+                            "90": "❌ 已拒絕",
                         }
                         _available = [s for s in _status_options if s != status]
                         with st.form(f"status_form_{inq_id}"):
@@ -1120,13 +1134,14 @@ with (tab2 if tab2 is not None else _null):
                             if st.form_submit_button("確認變更"):
                                 _con = _db()
                                 _now = datetime.now().isoformat()
-                                _note_entry = f"\n[{_vendor_store} {_now[:16]}] 狀態改為「{new_status}」" + (f"：{status_note}" if status_note else "")
+                                _new_label = _status_options.get(new_status, new_status)
+                                _note_entry = f"\n[{_vendor_store} {_now[:16]}] 狀態改為「{_new_label}」" + (f"：{status_note}" if status_note else "")
                                 _con.execute(
                                     "UPDATE pms_form_feedback SET status=?, vendor_reply=vendor_reply||? WHERE feedback_no=?",
                                     (new_status, _note_entry, inq_id),
                                 )
                                 _con.commit(); _con.close()
-                                st.success(f"狀態已更新為「{new_status}」")
+                                st.success(f"狀態已更新為「{_new_label}」")
                                 st.rerun()
 
 
@@ -1138,18 +1153,18 @@ with (tab3 if tab3 is not None else _null):
     st.markdown("#### 🤖 AI 派送助手 + mcp.Client")
     st.caption(
         "透過 AI 對話自動呼叫 `dispatch_delivery` MCP 工具完成派送。\n\n"
-        "範例：「請幫諮詢單 FB260708XXXXXX 安排萬家福信義店配送，40分鐘」"
+        "範例：「請幫諮詢單 2607080000XXXX 安排萬家福信義店配送，40分鐘」"
     )
     st.divider()
 
     # 顯示待處理諮詢單摘要（提供 AI 參考）
-    pending_inqs = get_inquiries("待處理", st.session_state.get("vendor_store"), brand=_brand_v, is_gym=_is_gym_only)
+    pending_inqs = get_inquiries("01", st.session_state.get("vendor_store"), brand=_brand_v, is_gym=_is_gym_only)
     if pending_inqs:
         with st.expander(f"📋 待處理諮詢單（{len(pending_inqs)} 筆）— 提供給 AI 參考", expanded=True):
             for inq in pending_inqs[:5]:
                 st.markdown(
                     f"- `{inq['feedback_no']}` ｜ **{inq.get('goal', '—')}** ｜ "
-                    f"聯絡：{inq.get('contact_name', '—')} {inq.get('contact_phone', '')} ｜ "
+                    f"聯絡：{inq.get('contact_name_display') or inq.get('contact_name', '—')} {inq.get('contact_phone', '')} ｜ "
                     f"預算：{'$' + str(inq.get('budget', 0)) if inq.get('budget') else '—'}"
                 )
             if len(pending_inqs) > 5:
@@ -1363,7 +1378,7 @@ if tab5 is not None:
                         if _trk:
                             st.markdown(f"**追蹤單號：** `{_trk}`")
                     with info2:
-                        st.markdown(f"**收件人：** {dl.get('contact_name','—')}")
+                        st.markdown(f"**收件人：** {dl.get('contact_name','—') or '—'}")
                         st.markdown(f"**電話：** {dl.get('contact_phone','—')}")
                         st.markdown(f"**目標：** {dl.get('goal','—')}")
 
@@ -1402,11 +1417,19 @@ if tab5 is not None:
                                         _vname = dl.get("vendor_name", "")
                                         _vkey  = _vname.split("門市")[0].split("信義")[0].split("中山")[0].strip()
                                         _con = _db()
+                                        # 1. 精確比對門市名稱
                                         _vu = _con.execute(
                                             "SELECT address FROM vendor_users "
                                             "WHERE store_name=? AND address!='' LIMIT 1",
                                             (_vname,)
                                         ).fetchone()
+                                        # 2. 品牌模糊比對 vendor_users（處理 vendor_name 只有品牌的情況）
+                                        if not _vu:
+                                            _vu = _con.execute(
+                                                "SELECT address FROM vendor_users "
+                                                "WHERE brand=? AND address!='' LIMIT 1",
+                                                (_vkey.split()[0],)
+                                            ).fetchone()
                                         _sv = _con.execute(
                                             "SELECT address FROM cms_homepage_service_vendor "
                                             "WHERE name LIKE ? AND is_enable=1 AND address!='' LIMIT 1",
@@ -1426,11 +1449,11 @@ if tab5 is not None:
                                         )
                                         stops = [{"name": _vname, "address": _vaddr}]
                                         # 組合完整地址（縣市＋區＋街道），提升 Nominatim 命中率
-                                        _county = dl.get("county_name", "")
-                                        _dist   = dl.get("district_name", "")
+                                        _county = dl.get("county_name") or ""
+                                        _dist   = dl.get("district_name") or ""
                                         _full_addr = (
                                             (_county + _dist + addr) if (_county and addr)
-                                            else (addr + " 台灣" if addr else "")
+                                            else (addr if addr else "")
                                         )
                                         _rr = json.loads(_find_route(
                                             stops_json=json.dumps(stops, ensure_ascii=False),
@@ -1470,14 +1493,16 @@ if tab5 is not None:
                                             _is_dest = _step["order"] == len(_route_pts)
                                             folium.Marker(
                                                 [_step["lat"], _step["lng"]],
+                                                tooltip=f"{'📍 目的地' if _is_dest else '🏪 取貨點'}：{_step['name']}",
                                                 popup=folium.Popup(
-                                                    f"{_step['order']}. {_step['name']}<br>{_step.get('address','')}",
-                                                    max_width=200,
+                                                    f"<b>{'📍 目的地' if _is_dest else '🏪 取貨點'}</b><br>"
+                                                    f"{_step['name']}<br>"
+                                                    f"<small>{_step.get('address','')}</small>",
+                                                    max_width=220,
                                                 ),
                                                 icon=folium.Icon(
                                                     color="red" if _is_dest else "blue",
-                                                    icon="flag" if _is_dest else "shopping-cart",
-                                                    prefix="fa",
+                                                    icon="map-marker" if _is_dest else "home",
                                                 ),
                                             ).add_to(_fm)
                                         if _geometry:
@@ -1740,8 +1765,9 @@ if tab6 is not None:
                                 st.session_state[f"cancel_confirm_{cid}"] = False
                                 st.rerun()
 
-# ── 自動刷新（放腳本最末，頁面渲染完後等待再 rerun）────────────────────────────
-if st.session_state.get("auto_refresh"):
-    import time as _time
-    _time.sleep(15)
-    st.rerun()
+# ── 自動刷新（每 30 秒，不阻塞 UI）──────────────────────────────────────────────
+try:
+    from streamlit_autorefresh import st_autorefresh
+    st_autorefresh(interval=30_000, key="dashboard_autorefresh")
+except ImportError:
+    pass  # 未安裝 streamlit-autorefresh 時忽略，手動按 🔄 刷新

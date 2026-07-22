@@ -13,12 +13,50 @@ import sys
 import json
 import uuid
 import smtplib
+import hashlib
+import base64
 import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import Optional
 from mcp.server import MCPServer
+
+
+# ---------------------------------------------------------------------------
+# AES-256-GCM 加密 / SHA-256 雜湊（官方 schema 聯絡欄位加密）
+# ---------------------------------------------------------------------------
+def _get_encrypt_key() -> bytes:
+    raw = os.getenv("ENCRYPT_KEY", "")
+    if raw:
+        try:
+            if len(raw) == 64:
+                return bytes.fromhex(raw)
+            decoded = base64.b64decode(raw)
+            return (decoded + b"\x00" * 32)[:32]
+        except Exception:
+            pass
+    return hashlib.sha256(b"uni-life-butler-default-key").digest()
+
+
+def _aes_encrypt(plaintext: str) -> str:
+    """AES-256-GCM 加密，回傳 base64(12-byte nonce + ciphertext + 16-byte tag)。"""
+    if not plaintext:
+        return ""
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        nonce = os.urandom(12)
+        ct_tag = AESGCM(_get_encrypt_key()).encrypt(nonce, plaintext.encode("utf-8"), None)
+        return base64.b64encode(nonce + ct_tag).decode("ascii")
+    except Exception:
+        return plaintext
+
+
+def _sha256_hash(plaintext: str) -> str:
+    """SHA-256 base64-digest（官方格式：32 bytes → 44-char base64）。"""
+    if not plaintext:
+        return ""
+    return base64.b64encode(hashlib.sha256(plaintext.encode("utf-8")).digest()).decode("ascii")
 
 # 手動讀 .env，注入環境變數
 _env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -41,49 +79,129 @@ def _ensure_schema():
     # Create pms_form_feedback if not exists
     con.execute("""
         CREATE TABLE IF NOT EXISTS pms_form_feedback (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            feedback_no   TEXT UNIQUE NOT NULL,
-            form_id       INTEGER NOT NULL DEFAULT 1,
-            service_id    INTEGER NOT NULL DEFAULT 1,
-            goal          TEXT NOT NULL DEFAULT '',
-            budget        INTEGER NOT NULL DEFAULT 0,
-            keyword       TEXT NOT NULL DEFAULT '',
-            county_code   TEXT NOT NULL DEFAULT '',
-            district_code TEXT NOT NULL DEFAULT '',
-            contact_name  TEXT NOT NULL DEFAULT '',
-            contact_phone TEXT NOT NULL DEFAULT '',
-            note          TEXT NOT NULL DEFAULT '',
-            user_id       INTEGER NOT NULL DEFAULT 0,
-            products_json TEXT NOT NULL DEFAULT '',
-            user_reply    TEXT NOT NULL DEFAULT '',
-            status        TEXT NOT NULL DEFAULT '待處理',
-            vendor_reply  TEXT NOT NULL DEFAULT '',
-            accepted_at   TEXT NOT NULL DEFAULT '',
-            created_at    TEXT NOT NULL
+            id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+            feedback_no                 TEXT UNIQUE NOT NULL,
+            service_id                  INTEGER NOT NULL DEFAULT 1,
+            platform_code               TEXT NOT NULL DEFAULT '01',
+            form_id                     INTEGER NOT NULL DEFAULT 1,
+            feedback_content            TEXT NOT NULL DEFAULT '',
+            form_type                   TEXT NOT NULL DEFAULT '1',
+            is_read                     TEXT NOT NULL DEFAULT '0',
+            status                      TEXT NOT NULL DEFAULT '01',
+            contact_name                TEXT DEFAULT '',
+            contact_name_hash           TEXT DEFAULT '',
+            contact_mobile              TEXT DEFAULT '',
+            contact_mobile_hash         TEXT DEFAULT '',
+            contact_landline            TEXT DEFAULT '',
+            contact_landline_hash       TEXT DEFAULT '',
+            contact_email               TEXT DEFAULT '',
+            contact_email_hash          TEXT DEFAULT '',
+            preferred_contact_time      TEXT DEFAULT '3',
+            contact_address_county      TEXT DEFAULT '',
+            contact_address_district    TEXT DEFAULT '',
+            contact_address_detail      TEXT DEFAULT '',
+            contact_address_detail_hash TEXT DEFAULT '',
+            description                 TEXT DEFAULT '',
+            inbr_account_id             TEXT NOT NULL DEFAULT '',
+            cre_time                    TEXT NOT NULL DEFAULT '',
+            upd_time                    TEXT NOT NULL DEFAULT '',
+            goal             TEXT NOT NULL DEFAULT '',
+            budget           INTEGER NOT NULL DEFAULT 0,
+            keyword          TEXT NOT NULL DEFAULT '',
+            county_code      TEXT NOT NULL DEFAULT '',
+            district_code    TEXT NOT NULL DEFAULT '',
+            contact_phone    TEXT NOT NULL DEFAULT '',
+            note             TEXT NOT NULL DEFAULT '',
+            address          TEXT NOT NULL DEFAULT '',
+            delivery_type    TEXT NOT NULL DEFAULT '外送',
+            pickup_store     TEXT NOT NULL DEFAULT '',
+            products_json    TEXT NOT NULL DEFAULT '',
+            user_id          INTEGER NOT NULL DEFAULT 0,
+            user_reply       TEXT NOT NULL DEFAULT '',
+            vendor_reply     TEXT NOT NULL DEFAULT '',
+            accepted_at      TEXT NOT NULL DEFAULT '',
+            images_json      TEXT NOT NULL DEFAULT '[]',
+            created_at       TEXT NOT NULL DEFAULT '',
+            contact_name_display TEXT NOT NULL DEFAULT ''
         )
     """)
 
     # Create mms_order_record if not exists
     con.execute("""
         CREATE TABLE IF NOT EXISTS mms_order_record (
-            id                INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_no          TEXT UNIQUE NOT NULL,
-            feedback_no       TEXT NOT NULL,
-            order_type        TEXT NOT NULL DEFAULT '05',
+            record_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_no            TEXT UNIQUE NOT NULL,
+            service_vendor_id   INTEGER NOT NULL DEFAULT 0,
+            service_id          INTEGER NOT NULL DEFAULT 0,
+            platform_code       TEXT NOT NULL DEFAULT '01',
+            inbr_account_id     TEXT NOT NULL DEFAULT '',
+            member_name         TEXT DEFAULT '',
+            member_name_hash    TEXT DEFAULT '',
+            member_phone        TEXT DEFAULT '',
+            member_phone_hash   TEXT DEFAULT '',
+            member_email        TEXT DEFAULT '',
+            member_email_hash   TEXT DEFAULT '',
+            order_type          TEXT NOT NULL DEFAULT '05',
+            order_status        TEXT NOT NULL DEFAULT '02',
+            order_time          TEXT NOT NULL DEFAULT '',
+            deposit_time        TEXT DEFAULT '',
+            confirm_time        TEXT DEFAULT '',
+            service_time        TEXT DEFAULT '',
+            complete_time       TEXT DEFAULT '',
+            cancel_time         TEXT DEFAULT '',
+            deposit_amount      REAL NOT NULL DEFAULT 0,
+            original_amount     REAL NOT NULL DEFAULT 0,
+            discount_amount     REAL NOT NULL DEFAULT 0,
+            shipping_fee_amount REAL NOT NULL DEFAULT 0,
+            final_amount        REAL NOT NULL DEFAULT 0,
+            refund_amount       REAL NOT NULL DEFAULT 0,
+            order_points        REAL NOT NULL DEFAULT 0,
+            used_points         REAL NOT NULL DEFAULT 0,
+            refund_points       REAL NOT NULL DEFAULT 0,
+            earn_points         REAL NOT NULL DEFAULT 0,
+            point_status        TEXT NOT NULL DEFAULT '01',
+            point_grant_time    TEXT DEFAULT '',
+            vendor_data         TEXT NOT NULL DEFAULT '{}',
+            order_items         TEXT NOT NULL DEFAULT '',
+            remark              TEXT DEFAULT '',
+            cancel_reason       TEXT DEFAULT '',
+            refund_reason       TEXT DEFAULT '',
+            source_file         TEXT DEFAULT '',
+            import_batch        TEXT DEFAULT '',
+            quote_approved_by   TEXT DEFAULT '',
+            quote_approved_time TEXT DEFAULT '',
+            quote_no            TEXT DEFAULT '',
+            comment_status      TEXT NOT NULL DEFAULT '00',
+            is_deleted          INTEGER NOT NULL DEFAULT 0,
+            cre_id              TEXT NOT NULL DEFAULT '',
+            cre_time            TEXT NOT NULL DEFAULT '',
+            upd_id              TEXT NOT NULL DEFAULT '',
+            upd_time            TEXT NOT NULL DEFAULT '',
+            feedback_no       TEXT NOT NULL DEFAULT '',
             vendor_name       TEXT NOT NULL DEFAULT '',
             estimated_minutes INTEGER NOT NULL DEFAULT 60,
             reply_message     TEXT NOT NULL DEFAULT '',
-            status            TEXT NOT NULL DEFAULT '01',
+            delivery_company  TEXT NOT NULL DEFAULT '',
+            tracking_no       TEXT NOT NULL DEFAULT '',
             driver_name       TEXT NOT NULL DEFAULT '',
-            created_at        TEXT NOT NULL
+            status            TEXT NOT NULL DEFAULT '01',
+            created_at        TEXT NOT NULL DEFAULT ''
         )
     """)
 
-    # Add address column to users if missing
+    # Add address / uuid columns to users if missing
     try:
         cols_u = {r[1] for r in con.execute("PRAGMA table_info(users)")}
         if 'address' not in cols_u:
             con.execute("ALTER TABLE users ADD COLUMN address TEXT NOT NULL DEFAULT ''")
+        if 'uuid' not in cols_u:
+            con.execute("ALTER TABLE users ADD COLUMN uuid TEXT NOT NULL DEFAULT ''")
+        # Backfill uuid for existing rows
+        con.execute(
+            "UPDATE users SET uuid=lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||"
+            "lower(substr(hex(randomblob(2)),2))||'-'||lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(6)))"
+            " WHERE uuid=''"
+        )
     except Exception:
         pass
     # Add address to cms_homepage_service_vendor if missing
@@ -97,19 +215,45 @@ def _ensure_schema():
             con.execute("UPDATE cms_homepage_service_vendor SET address='台北市松山區八德路三段32號' WHERE name='統一生機'")
     except Exception:
         pass
-    # Add address / delivery_type columns to pms_form_feedback if missing
+    # Add missing columns to pms_form_feedback
     try:
         cols_f = {r[1] for r in con.execute("PRAGMA table_info(pms_form_feedback)")}
-        if 'address' not in cols_f:
-            con.execute("ALTER TABLE pms_form_feedback ADD COLUMN address TEXT NOT NULL DEFAULT ''")
-        if 'delivery_type' not in cols_f:
-            con.execute("ALTER TABLE pms_form_feedback ADD COLUMN delivery_type TEXT NOT NULL DEFAULT '外送'")
-        if 'pickup_store' not in cols_f:
-            con.execute("ALTER TABLE pms_form_feedback ADD COLUMN pickup_store TEXT NOT NULL DEFAULT ''")
-        if 'images_json' not in cols_f:
-            con.execute("ALTER TABLE pms_form_feedback ADD COLUMN images_json TEXT NOT NULL DEFAULT '[]'")
-        if 'feedback_content' not in cols_f:
-            con.execute("ALTER TABLE pms_form_feedback ADD COLUMN feedback_content TEXT NOT NULL DEFAULT ''")
+        for _col, _defn in [
+            ("address",                     "TEXT NOT NULL DEFAULT ''"),
+            ("delivery_type",               "TEXT NOT NULL DEFAULT '外送'"),
+            ("pickup_store",                "TEXT NOT NULL DEFAULT ''"),
+            ("images_json",                 "TEXT NOT NULL DEFAULT '[]'"),
+            ("feedback_content",            "TEXT NOT NULL DEFAULT ''"),
+            ("platform_code",               "TEXT NOT NULL DEFAULT '01'"),
+            ("form_type",                   "TEXT NOT NULL DEFAULT '1'"),
+            ("is_read",                     "TEXT NOT NULL DEFAULT '0'"),
+            ("preferred_contact_time",      "TEXT DEFAULT '3'"),
+            ("contact_name_hash",           "TEXT DEFAULT ''"),
+            ("contact_mobile",              "TEXT DEFAULT ''"),
+            ("contact_mobile_hash",         "TEXT DEFAULT ''"),
+            ("contact_landline",            "TEXT DEFAULT ''"),
+            ("contact_landline_hash",       "TEXT DEFAULT ''"),
+            ("contact_email",               "TEXT DEFAULT ''"),
+            ("contact_email_hash",          "TEXT DEFAULT ''"),
+            ("contact_address_county",      "TEXT DEFAULT ''"),
+            ("contact_address_district",    "TEXT DEFAULT ''"),
+            ("contact_address_detail",      "TEXT DEFAULT ''"),
+            ("contact_address_detail_hash", "TEXT DEFAULT ''"),
+            ("description",                 "TEXT DEFAULT ''"),
+            ("inbr_account_id",             "TEXT NOT NULL DEFAULT ''"),
+            ("cre_time",                    "TEXT NOT NULL DEFAULT ''"),
+            ("upd_time",                    "TEXT NOT NULL DEFAULT ''"),
+            ("contact_name_display",        "TEXT NOT NULL DEFAULT ''"),
+        ]:
+            if _col not in cols_f:
+                con.execute(f"ALTER TABLE pms_form_feedback ADD COLUMN {_col} {_defn}")
+        # Migrate: if contact_name looks like plaintext (no base64 pattern), copy to display
+        # This handles existing rows created before encryption was added
+        if "contact_name_display" not in cols_f:
+            con.execute(
+                "UPDATE pms_form_feedback SET contact_name_display=contact_name "
+                "WHERE contact_name!='' AND contact_name_display=''"
+            )
     except Exception:
         pass
     # Add / migrate mms_order_record columns to match real schema
@@ -119,7 +263,7 @@ def _ensure_schema():
             ("driver_name",       "TEXT NOT NULL DEFAULT ''"),
             ("delivery_company",  "TEXT NOT NULL DEFAULT ''"),
             ("tracking_no",       "TEXT NOT NULL DEFAULT ''"),
-            ("order_status",      "TEXT NOT NULL DEFAULT '12'"),
+            ("order_status",      "TEXT NOT NULL DEFAULT '02'"),
             ("platform_code",     "TEXT NOT NULL DEFAULT '01'"),
             ("service_vendor_id", "INTEGER NOT NULL DEFAULT 0"),
             ("service_id",        "INTEGER NOT NULL DEFAULT 0"),
@@ -127,6 +271,39 @@ def _ensure_schema():
             ("deposit_amount",    "REAL NOT NULL DEFAULT 0"),
             ("final_amount",      "REAL NOT NULL DEFAULT 0"),
             ("order_items",       "TEXT NOT NULL DEFAULT ''"),
+            ("vendor_data",       "TEXT NOT NULL DEFAULT '{}'"),
+            ("member_name",       "TEXT DEFAULT ''"),
+            ("member_name_hash",  "TEXT DEFAULT ''"),
+            ("member_phone",      "TEXT DEFAULT ''"),
+            ("member_phone_hash", "TEXT DEFAULT ''"),
+            ("member_email",      "TEXT DEFAULT ''"),
+            ("member_email_hash", "TEXT DEFAULT ''"),
+            ("order_time",        "TEXT NOT NULL DEFAULT ''"),
+            ("original_amount",   "REAL NOT NULL DEFAULT 0"),
+            ("discount_amount",   "REAL NOT NULL DEFAULT 0"),
+            ("shipping_fee_amount", "REAL NOT NULL DEFAULT 0"),
+            ("refund_amount",     "REAL NOT NULL DEFAULT 0"),
+            ("order_points",      "REAL NOT NULL DEFAULT 0"),
+            ("used_points",       "REAL NOT NULL DEFAULT 0"),
+            ("refund_points",     "REAL NOT NULL DEFAULT 0"),
+            ("earn_points",       "REAL NOT NULL DEFAULT 0"),
+            ("point_status",      "TEXT NOT NULL DEFAULT '01'"),
+            ("point_grant_time",  "TEXT DEFAULT ''"),
+            ("remark",            "TEXT DEFAULT ''"),
+            ("cancel_reason",     "TEXT DEFAULT ''"),
+            ("refund_reason",     "TEXT DEFAULT ''"),
+            ("source_file",       "TEXT DEFAULT ''"),
+            ("import_batch",      "TEXT DEFAULT ''"),
+            ("quote_approved_by", "TEXT DEFAULT ''"),
+            ("quote_approved_time","TEXT DEFAULT ''"),
+            ("quote_no",          "TEXT DEFAULT ''"),
+            ("comment_status",    "TEXT NOT NULL DEFAULT '00'"),
+            ("is_deleted",        "INTEGER NOT NULL DEFAULT 0"),
+            ("cre_id",            "TEXT NOT NULL DEFAULT ''"),
+            ("cre_time",          "TEXT NOT NULL DEFAULT ''"),
+            ("upd_id",            "TEXT NOT NULL DEFAULT ''"),
+            ("upd_time",          "TEXT NOT NULL DEFAULT ''"),
+            ("feedback_no",       "TEXT NOT NULL DEFAULT ''"),
         ]:
             if _col not in cols_m:
                 con.execute(f"ALTER TABLE mms_order_record ADD COLUMN {_col} {_defn}")
@@ -192,6 +369,18 @@ def _ensure_schema():
     except Exception:
         pass
 
+    # Migrate pms_form_feedback rows that still have Chinese status values
+    _status_code_map = {
+        '待處理': '01', '配送中': '02', '預留中': '03',
+        '待簽名': '04', '待後台確認': '05', '已完成': '80', '已拒絕': '90',
+    }
+    for _zh, _code in _status_code_map.items():
+        con.execute(
+            "UPDATE pms_form_feedback SET status=? WHERE status=?",
+            (_code, _zh),
+        )
+    con.commit()
+
     # Migrate old inquiry table if it exists
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if 'inquiry' in tables:
@@ -203,8 +392,14 @@ def _ensure_schema():
                 old_no = row_dict.get('inquiry_no', '')
                 if not old_no:
                     continue
-                # Convert IQ prefix to FB prefix for the feedback_no
-                new_no = 'FB' + old_no[2:] if old_no.startswith('IQ') else old_no
+                # Keep original no (may have FB prefix from old data)
+                new_no = old_no
+                _old_status_map = {
+                    '待處理': '01', '配送中': '02', '預留中': '03',
+                    '待簽名': '04', '待後台確認': '05', '已完成': '80', '已拒絕': '90',
+                }
+                _mig_status = row_dict.get('status', '待處理')
+                _mig_status = _old_status_map.get(_mig_status, _mig_status)
                 try:
                     con.execute("""
                         INSERT OR IGNORE INTO pms_form_feedback
@@ -217,7 +412,7 @@ def _ensure_schema():
                           row_dict.get('keyword',''), row_dict.get('contact_name',''),
                           row_dict.get('contact_phone',''), row_dict.get('note',''),
                           row_dict.get('user_id',0), row_dict.get('products_json',''),
-                          row_dict.get('user_reply',''), row_dict.get('status','待處理'),
+                          row_dict.get('user_reply',''), _mig_status,
                           row_dict.get('vendor_reply',''), row_dict.get('accepted_at',''),
                           row_dict.get('created_at', datetime.now().isoformat())))
                     # Migrate delivery_no to mms_order_record
@@ -345,7 +540,13 @@ def recommend_high_protein(budget: int, goal: str = "") -> str:
     ).fetchall()
     con.close()
 
-    candidates = [dict(r) for r in rows]
+    _EXCLUDE_VENDORS = {"Mister Donut", "Cold Stone", "21plus", "統一星巴克"}
+    _min_protein = 8 if goal == "增肌" else 5
+    candidates = [
+        dict(r) for r in rows
+        if dict(r).get("vendor") not in _EXCLUDE_VENDORS
+        and dict(r).get("protein_g", 0) >= _min_protein
+    ]
 
     # 依目標排序：減脂優先蛋白質/熱量比，增肌優先蛋白質絕對量
     if goal == "減脂":
@@ -450,7 +651,7 @@ def submit_inquiry(goal: str, contact_name: str, contact_phone: str,
                            "message": "尚未收集到聯絡電話，請先詢問用戶的電話再呼叫此工具。"},
                           ensure_ascii=False)
 
-    feedback_no = "FB" + datetime.now().strftime("%y%m%d") + uuid.uuid4().hex[:6].upper()
+    feedback_no = datetime.now().strftime("%y%m%d") + f"{uuid.uuid4().int % 100000000:08d}"
 
     # 建立 feedback_content（官方格式）
     _img_paths = []
@@ -458,32 +659,141 @@ def submit_inquiry(goal: str, contact_name: str, contact_phone: str,
         _img_paths = json.loads(images_json) if images_json else []
     except Exception:
         pass
-    _answer_stub = {"answerId": None, "quantity": None, "countyCode": None,
-                    "countyName": None, "districtCode": None, "districtName": None,
-                    "isQuotedSeparately": None}
+
+    # 先取 email（feedback_content 和加密都需要）
+    _plain_email = ""
+    if user_id:
+        try:
+            _con_tmp = _db()
+            _urow = _con_tmp.execute("SELECT email FROM users WHERE id=?", (user_id,)).fetchone()
+            _con_tmp.close()
+            if _urow and _urow["email"]:
+                _plain_email = _urow["email"]
+        except Exception:
+            pass
+
+    def _ans(answer_val, answer_id=None, sort_no=None, title_str=None):
+        """官方 answerList 項目格式（amount=null）。"""
+        item = {
+            "amount": None, "answer": answer_val,
+            "answerId": answer_id, "quantity": None,
+            "countyCode": None, "countyName": None,
+            "districtCode": None, "districtName": None,
+            "isQuotedSeparately": None,
+        }
+        if sort_no is not None:
+            item["sort"] = sort_no
+        if title_str is not None:
+            item["title"] = title_str
+        return item
+
+    _sort = 1
     _fc_data = [
-        {"type": "1", "topicId": 1, "answerList": [{**_answer_stub, "answer": goal}]},
+        {"type": "1", "topicId": 1,
+         "answerList": [_ans(goal, sort_no=_sort, title_str="目標/需求")]},
     ]
+    _sort += 1
     if note:
-        _fc_data.append({"type": "2", "topicId": 2, "answerList": [{**_answer_stub, "answer": note}]})
+        _fc_data.append({"type": "2", "topicId": 2,
+                         "answerList": [_ans(note, sort_no=_sort, title_str="備註")]})
+        _sort += 1
     for _i, _ip in enumerate(_img_paths):
         _fc_data.append({"type": "6", "topicId": 54 + _i,
-                         "answerList": [{**_answer_stub, "answer": _ip, "topicId": 54 + _i}]})
+                         "answerList": [_ans(_ip)]})
+        _sort += 1
+    # 聯絡資訊（官方格式：topicId 97=姓名, 98=手機, 100=email, 103=地址；無 type 欄位）
+    _fc_data.append({"topicId": 97, "answerList": [_ans(contact_name)]})
+    if contact_phone:
+        _fc_data.append({"topicId": 98, "answerList": [_ans(contact_phone)]})
+    if _plain_email:
+        _fc_data.append({"topicId": 100, "answerList": [_ans(_plain_email)]})
+    if address:
+        _fc_data.append({"type": "5", "topicId": 103, "answerList": [{
+            "amount": None, "answer": None, "answerId": 103, "quantity": None,
+            "countyCode": None, "countyName": None,
+            "districtCode": None, "districtName": None,
+            "addressDetail": address, "isQuotedSeparately": None,
+        }]})
+
     feedback_content = json.dumps(
         {"data": _fc_data, "formId": 1, "calculations": {"totalAmount": budget}},
         ensure_ascii=False,
     )
 
+    # 加密聯絡欄位（官方欄位存密文；自訂欄位存明文供顯示）
+    _now_iso = datetime.now().isoformat()
+    _name_enc   = _aes_encrypt(contact_name)
+    _name_hash  = _sha256_hash(contact_name)
+    _phone_enc  = _aes_encrypt(contact_phone)
+    _phone_hash = _sha256_hash(contact_phone)
+    _addr_enc   = _aes_encrypt(address)
+    _addr_hash  = _sha256_hash(address)
+    _email_enc  = _aes_encrypt(_plain_email)
+    _email_hash = _sha256_hash(_plain_email)
+
+    # 取用戶 UUID 及縣市資訊
+    _inbr_uuid = ""
+    _user_county_code = ""
+    _user_district_code = ""
+    if user_id:
+        try:
+            _con_uuid = _db()
+            _urow_uuid = _con_uuid.execute(
+                "SELECT uuid, county_code, district_code FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            _con_uuid.close()
+            if _urow_uuid:
+                if _urow_uuid["uuid"]:
+                    _inbr_uuid = _urow_uuid["uuid"]
+                _user_county_code   = _urow_uuid["county_code"]   or ""
+                _user_district_code = _urow_uuid["district_code"] or ""
+        except Exception:
+            pass
+    if not _inbr_uuid:
+        _inbr_uuid = str(uuid.uuid4())
+    # 若地址未含縣市，補入用戶縣市資訊讓路線規劃 geocoding 更準確
+    if address and _user_county_code and not any(c in address for c in ["市", "縣"]):
+        try:
+            _con_c = _db()
+            _crow = _con_c.execute("SELECT name FROM sys_county WHERE code=?", (_user_county_code,)).fetchone()
+            _drow = _con_c.execute("SELECT name FROM sys_district WHERE code=?", (_user_district_code,)).fetchone() if _user_district_code else None
+            _con_c.close()
+            _county_name   = _crow["name"]  if _crow  else ""
+            _district_name = _drow["name"]  if _drow  else ""
+            address = _county_name + _district_name + address
+        except Exception:
+            pass
+
     con = _db()
     con.execute(
         "INSERT INTO pms_form_feedback "
-        "(feedback_no,goal,budget,keyword,contact_name,contact_phone,note,address,"
-        " products_json,user_id,delivery_type,pickup_store,images_json,feedback_content,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (feedback_no, goal, budget, keyword,
-         contact_name, contact_phone, note, address, products_json, user_id,
-         delivery_type, pickup_store, json.dumps(_img_paths, ensure_ascii=False),
-         feedback_content, datetime.now().isoformat()),
+        "(feedback_no, platform_code, form_type, is_read,"
+        " contact_name, contact_name_hash,"
+        " contact_mobile, contact_mobile_hash,"
+        " contact_email, contact_email_hash,"
+        " contact_address_detail, contact_address_detail_hash,"
+        " preferred_contact_time, description,"
+        " inbr_account_id, cre_time, upd_time,"
+        " goal, budget, keyword, contact_phone, note, address,"
+        " delivery_type, pickup_store,"
+        " products_json, user_id, images_json, feedback_content,"
+        " county_code, district_code,"
+        " created_at, contact_name_display) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (feedback_no, '01', '1', '0',
+         _name_enc, _name_hash,
+         _phone_enc, _phone_hash,
+         _email_enc, _email_hash,
+         _addr_enc, _addr_hash,
+         '3', note,
+         _inbr_uuid, _now_iso, _now_iso,
+         goal, budget, keyword, contact_phone, note, address,
+         delivery_type, pickup_store,
+         products_json, user_id,
+         json.dumps(_img_paths, ensure_ascii=False),
+         feedback_content,
+         _user_county_code, _user_district_code,
+         _now_iso, contact_name),
     )
     con.commit()
     con.close()
@@ -568,7 +878,7 @@ def dispatch_delivery(inquiry_no: str, vendor_name: str,
     3. 記錄接單廠商、配送業者、回覆訊息與接單時間
 
     參數:
-        inquiry_no:        諮詢單編號，例如「FB260708XXXXXX」
+        inquiry_no:        諮詢單編號，例如「2607080000XXXX」（14位純數字）
         vendor_name:       接單廠商或門市，例如「萬家福信義店」
         estimated_minutes: 預計送達分鐘數，預設 60
         reply_message:     廠商給用戶的回覆訊息（選填）
@@ -635,41 +945,96 @@ def dispatch_delivery(inquiry_no: str, vendor_name: str,
     ).fetchone() if service_vendor_id else None
     service_id = svc_row["id"] if svc_row else 0
 
-    # 組 order_items JSON（對照真實格式）
+    # 組 order_items JSON（官方格式）
     order_items_obj = {
         "orderItems": [
             {
                 "itemName":   p.get("name", ""),
-                "quantity":   1,
+                "quantity":   int(p.get("qty", 1)),
                 "unitPrice":  int(p.get("price", 0)),
-                "itemAmount": int(p.get("price", 0)),
+                "itemAmount": int(p.get("price", 0)) * int(p.get("qty", 1)),
                 "unit":       None,
                 "attribute":  [],
             }
             for p in products
         ],
-        "totalAmount": sum(int(p.get("price", 0)) for p in products),
+        "totalAmount": sum(int(p.get("price", 0)) * int(p.get("qty", 1)) for p in products),
     }
     order_items_str = json.dumps(order_items_obj, ensure_ascii=False)
     final_amount = float(budget_val) if budget_val else float(order_items_obj["totalAmount"])
 
+    # vendor_data — 存放服務商特定欄位（官方 jsonb，自訂配送資訊放此）
+    vendor_data_obj = {
+        "vendorName":       vendor_name,
+        "estimatedMinutes": estimated_minutes,
+        "replyMessage":     full_reply,
+        "deliveryCompany":  delivery_company,
+        "trackingNo":       tracking_no,
+    }
+    vendor_data_str = json.dumps(vendor_data_obj, ensure_ascii=False)
+
+    # 查詢並加密會員資料
+    _mem_name_enc   = ""
+    _mem_name_hash  = ""
+    _mem_phone_enc  = ""
+    _mem_phone_hash = ""
+    _mem_email_enc  = ""
+    _mem_email_hash = ""
+    if user_id_val:
+        _urow_enc = con.execute(
+            "SELECT username, contact_phone, email FROM users WHERE id=?", (user_id_val,)
+        ).fetchone()
+        if _urow_enc:
+            if _urow_enc["username"]:
+                _mem_name_enc  = _aes_encrypt(_urow_enc["username"])
+                _mem_name_hash = _sha256_hash(_urow_enc["username"])
+            if _urow_enc["contact_phone"]:
+                _mem_phone_enc  = _aes_encrypt(_urow_enc["contact_phone"])
+                _mem_phone_hash = _sha256_hash(_urow_enc["contact_phone"])
+            if _urow_enc["email"]:
+                _mem_email_enc  = _aes_encrypt(_urow_enc["email"])
+                _mem_email_hash = _sha256_hash(_urow_enc["email"])
+
+    # 取用戶 UUID 作為 inbr_account_id（官方格式）
+    _inbr_uuid_d = ""
+    if user_id_val:
+        try:
+            _con_uuid_d = _db()
+            _urow_uuid_d = _con_uuid_d.execute("SELECT uuid FROM users WHERE id=?", (user_id_val,)).fetchone()
+            _con_uuid_d.close()
+            if _urow_uuid_d and _urow_uuid_d["uuid"]:
+                _inbr_uuid_d = _urow_uuid_d["uuid"]
+        except Exception:
+            pass
+    if not _inbr_uuid_d:
+        _inbr_uuid_d = str(uuid.uuid4())
+
     con.execute(
         "INSERT INTO mms_order_record "
-        "(order_no, feedback_no, order_type, order_status, platform_code, "
-        " service_vendor_id, service_id, inbr_account_id, "
-        " vendor_name, estimated_minutes, reply_message, "
-        " delivery_company, tracking_no, status, "
-        " deposit_amount, final_amount, order_items, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (order_no, inquiry_no, '01', '12', '01',
-         service_vendor_id, service_id, str(user_id_val),
-         vendor_name, estimated_minutes, full_reply,
-         delivery_company, tracking_no, '01',
-         final_amount, final_amount, order_items_str, now_iso),
+        "(order_no, service_vendor_id, service_id, platform_code, inbr_account_id,"
+        " member_name, member_name_hash, member_phone, member_phone_hash,"
+        " member_email, member_email_hash,"
+        " order_type, order_status, order_time,"
+        " deposit_amount, original_amount, final_amount,"
+        " vendor_data, order_items,"
+        " cre_time, upd_time,"
+        " feedback_no, vendor_name, estimated_minutes, reply_message,"
+        " delivery_company, tracking_no, status, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (order_no, service_vendor_id, service_id, '01', _inbr_uuid_d,
+         _mem_name_enc, _mem_name_hash,
+         _mem_phone_enc, _mem_phone_hash,
+         _mem_email_enc, _mem_email_hash,
+         '05', '02', now_iso,
+         final_amount, final_amount, final_amount,
+         vendor_data_str, order_items_str,
+         now_iso, now_iso,
+         inquiry_no, vendor_name, estimated_minutes, full_reply,
+         delivery_company, tracking_no, '01', now_iso),
     )
     con.execute(
         "UPDATE pms_form_feedback "
-        "SET status='配送中', accepted_at=?, vendor_reply=? "
+        "SET status='02', accepted_at=?, vendor_reply=? "
         "WHERE feedback_no=?",
         (now_iso, stored_reply, inquiry_no),
     )
@@ -750,6 +1115,15 @@ def find_route(stops_json: str, dest_lat: float = 0, dest_lng: float = 0, dest_a
         m2 = _re.match(r'^(.{2,5}[市縣])', address)
         if m2 and m2.group(1) not in candidates:
             candidates.append(m2.group(1))
+        # Strip house numbers (e.g. 9號 / 之3) to improve Nominatim hit rate
+        _no_num = _re.sub(r'\d+(?:之\d+)?號.*$', '', address).strip()
+        if _no_num and _no_num != address and _no_num not in candidates:
+            candidates.append(_no_num)
+        # If address doesn't start with a city name, try prepending major Taiwan cities
+        if not _re.match(r'^.{2,5}[市縣]', address):
+            _base = _no_num or address.replace(" 台灣", "").replace("台灣", "").strip()
+            for _city in ["台北市", "新北市", "台中市", "桃園市", "高雄市", "台南市"]:
+                candidates.append(f"{_base} {_city}")  # "師大路 台北市" format works best
 
         for cand in candidates:
             try:
@@ -1938,7 +2312,7 @@ def enroll_gym_course(contact_name: str, contact_phone: str,
                           ensure_ascii=False)
 
     # 建立一張諮詢單，goal 列出所有課程
-    feedback_no = "FB" + datetime.now().strftime("%y%m%d") + uuid.uuid4().hex[:6].upper()
+    feedback_no = datetime.now().strftime("%y%m%d") + f"{uuid.uuid4().int % 100000000:08d}"
     gym_name    = courses_found[0]["gym_name"]
     course_list = "、".join(c["course_name"] for c in courses_found)
     goal_text   = f"課程報名：{gym_name} {course_list}"
@@ -1948,7 +2322,7 @@ def enroll_gym_course(contact_name: str, contact_phone: str,
     con.execute(
         "INSERT INTO pms_form_feedback "
         "(feedback_no,goal,keyword,contact_name,contact_phone,note,status,user_id,created_at) "
-        "VALUES (?,?,?,?,?,?,'待處理',?,?)",
+        "VALUES (?,?,?,?,?,?,'01',?,?)",
         (feedback_no, goal_text, keyword_str, contact_name, contact_phone, note, user_id or 0, now_iso),
     )
 
