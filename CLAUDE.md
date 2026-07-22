@@ -73,11 +73,11 @@ python mcp_server.py --selftest
 fitness_product          — 統一集團商品（name, vendor, protein_g, calories, price, stock）
 cms_homepage_service_vendor — 服務通路（7-ELEVEN/萬家福/康是美/統一生機/Mister Donut/Cold Stone/21plus/統一星巴克/聖德科斯）
 partner_vendor           — 合作廠商（Being Sport健身房/統一速達/統超保險/統一證券/清潔等）
-pms_form_feedback        — 諮詢單（feedback_no 格式: FB260706XXXXXX，status: 待處理/配送中/預留中/已完成/已拒絕）
+pms_form_feedback        — 諮詢單（feedback_no 格式: 2607060000XXXX 純數字14碼，status: 01待處理/02配送中/03預留中/04待簽名/05待後台確認/80已完成/90已拒絕）
 mms_order_record         — 外送派件單（order_no 格式: ORD260706XXXXXX）
 sys_county               — 縣市（22個，code 01~22）
 sys_district             — 行政區（360個，含全台22縣市完整行政區）
-users                    — 消費者帳號（含 email, county_code, district_code, address）
+users                    — 消費者帳號（含 email, county_code, district_code, address, uuid）
 vendor_users             — 廠商/後台帳號
 conversation             — AI 對話歷史
 gym_course / course_enrollment — 健身課程與報名記錄

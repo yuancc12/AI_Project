@@ -9,6 +9,7 @@ import json
 import sqlite3
 import asyncio
 import concurrent.futures
+import uuid as _uuid_mod
 from datetime import datetime
 import anthropic
 from openai import OpenAI
@@ -90,11 +91,11 @@ def register_user(username, password, gender="", birthday="",
         con.execute(
             "INSERT INTO users "
             "(username,password,gender,birthday,height_cm,weight_kg,"
-            "email,dietary_pref,county_code,district_code,address,contact_phone,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "email,dietary_pref,county_code,district_code,address,contact_phone,uuid,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (username, password, gender, birthday, height_cm, weight_kg,
              email, dietary_pref, county_code, district_code,
-             address, contact_phone, datetime.now().isoformat()),
+             address, contact_phone, str(_uuid_mod.uuid4()), datetime.now().isoformat()),
         )
         con.commit(); con.close(); return True
     except Exception:
@@ -191,9 +192,16 @@ def _ensure_users_schema():
         ("district_code", "TEXT NOT NULL DEFAULT ''"),
         ("address",       "TEXT NOT NULL DEFAULT ''"),
         ("contact_phone", "TEXT NOT NULL DEFAULT ''"),
+        ("uuid",          "TEXT NOT NULL DEFAULT ''"),
     ]:
         if col not in cols:
             con.execute(f"ALTER TABLE users ADD COLUMN {col} {defn}")
+    # Backfill uuid for existing rows that have none
+    con.execute(
+        "UPDATE users SET uuid=lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||"
+        "lower(substr(hex(randomblob(2)),2))||'-'||lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(6)))"
+        " WHERE uuid=''"
+    )
     con.commit()
     con.close()
 
