@@ -949,6 +949,7 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                                     _cart_new[_rpname]["qty"] += 1
                                 else:
                                     _cart_new[_rpname] = {
+                                        "name":     _rpname,
                                         "qty":      1,
                                         "price":    p.get("price", 0),
                                         "vendor":   vendor,
@@ -1001,6 +1002,7 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                             _cart_new[_pname]["qty"] += 1
                         else:
                             _cart_new[_pname] = {
+                                "name":     _pname,
                                 "qty":      1,
                                 "price":    p.get("price", 0),
                                 "vendor":   vendor,
@@ -1814,11 +1816,11 @@ elif st.session_state.stage == "inquiry_form":
                 v = p.get("vendor", "其他")
                 by_vendor.setdefault(v, []).append(p)
 
+            _chk_idx = 0
             for vendor, items in by_vendor.items():
                 emoji = VENDOR_EMOJI.get(vendor, "⚪")
                 st.markdown(f"#### {emoji} {vendor}")
                 for p in items:
-                    pid      = p.get("id", p.get("name", ""))
                     max_stock = int(p.get("stock", 1)) or 1
                     label = (
                         f"**{p.get('name', '')}** — "
@@ -1828,14 +1830,15 @@ elif st.session_state.stage == "inquiry_form":
                         f"📦 庫存 {p.get('stock', 0)}"
                     )
                     col_chk, col_qty = st.columns([5, 1])
-                    checked = col_chk.checkbox(label, value=True, key=f"chk_{pid}")
+                    checked = col_chk.checkbox(label, value=True, key=f"chk_{_chk_idx}")
                     qty = col_qty.number_input(
                         "數量", min_value=1, max_value=max_stock,
                         value=1, step=1,
-                        key=f"qty_{pid}",
+                        key=f"qty_{_chk_idx}",
                         label_visibility="collapsed",
                         disabled=not checked,
                     )
+                    _chk_idx += 1
                     if checked:
                         selected_products.append({**p, "qty": int(qty)})
                 st.markdown("")
