@@ -2342,6 +2342,24 @@ elif st.session_state.stage == "insurance_sign":
 
 elif st.session_state.stage == "chat":
 
+    # ── Pill ✕ 移除（query param 觸發）────────────────────────────
+    from urllib.parse import quote as _qe, unquote as _qd
+    _rmc = st.query_params.get("rm_cart", "")
+    if _rmc:
+        _c = dict(st.session_state.get("cart", {}))
+        _c.pop(_rmc, None)
+        st.session_state.cart = _c
+        del st.query_params["rm_cart"]
+        st.rerun()
+    _rmg = st.query_params.get("rm_course", "")
+    if _rmg:
+        _sc2 = list(st.session_state.get("selected_courses", []))
+        if _rmg in _sc2:
+            _sc2.remove(_rmg)
+        st.session_state.selected_courses = _sc2
+        del st.query_params["rm_course"]
+        st.rerun()
+
     using_claude = bool(st.session_state.api_key)
     using_gpt    = bool(st.session_state.get("openai_key")) and not using_claude
     _ai_badge    = (
@@ -2484,68 +2502,63 @@ elif st.session_state.stage == "chat":
 
     # ── 已選商品 Pills（chat_input 正上方，融入聊天區域）───────────────
     _cart = st.session_state.get("cart", {})
-    # ── Pills 共用 CSS（商品卡片無框化 + pill 樣式）────────────────
+    # ── Pills + 商品卡片 共用 CSS ────────────────────────────────
     st.markdown("""<style>
-.cpill{display:inline-block;background:#e8f5e9;border:1.5px solid #00833D;
-       border-radius:999px;padding:3px 13px;font-size:13px;color:#1a5c35;
-       font-weight:600;white-space:nowrap;line-height:1.6;}
-.cpill-gym{display:inline-block;background:#e3f2fd;border:1.5px solid #1565C0;
-           border-radius:999px;padding:3px 13px;font-size:13px;color:#1a3a6b;
-           font-weight:600;white-space:nowrap;line-height:1.6;}
-/* ✕ 按鈕縮小化 */
-div[data-testid="stHorizontalBlock"] button[kind="secondary"]{
-    padding:2px 6px!important;font-size:12px!important;
-    border-radius:999px!important;min-height:0!important;}
-/* Expander 內商品/課程按鈕：移除框線，整張卡片可點 */
+/* 橫向滑動 pill 行 */
+.pill-row{display:flex;overflow-x:auto;gap:8px;padding:6px 2px 6px;
+          -webkit-overflow-scrolling:touch;scrollbar-width:thin;}
+.pill-row::-webkit-scrollbar{height:4px;}
+.pill-row::-webkit-scrollbar-thumb{background:#c8e6c9;border-radius:9px;}
+/* 購物車 pill（綠） */
+.cpill{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;
+       background:#e8f5e9;border:1.5px solid #00833D;border-radius:999px;
+       padding:4px 10px 4px 12px;font-size:13px;color:#1a5c35;font-weight:600;
+       white-space:nowrap;text-decoration:none!important;}
+.cpill .rm{font-size:11px;font-weight:700;opacity:.6;line-height:1;
+           padding:0 2px;text-decoration:none;color:inherit;}
+.cpill .rm:hover{opacity:1;}
+/* 課程 pill（藍） */
+.cpill-gym{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;
+           background:#e3f2fd;border:1.5px solid #1565C0;border-radius:999px;
+           padding:4px 10px 4px 12px;font-size:13px;color:#1a3a6b;font-weight:600;
+           white-space:nowrap;text-decoration:none!important;}
+.cpill-gym .rm{font-size:11px;font-weight:700;opacity:.6;line-height:1;
+               padding:0 2px;text-decoration:none;color:inherit;}
+.cpill-gym .rm:hover{opacity:1;}
+/* Expander 內商品/課程按鈕：移除 button 框，整張卡片可點 */
 [data-testid="stExpander"] button[data-testid="baseButton-secondary"]{
-    background:#fff!important;
-    border:1px solid #e8f5e9!important;
-    border-left:4px solid #00833D!important;
-    box-shadow:none!important;
-    text-align:left!important;
-    padding:10px 14px!important;
-    border-radius:8px!important;
-    width:100%!important;
-    font-size:14px!important;
-    color:rgb(49,51,63)!important;
-    margin:2px 0!important;
-    line-height:1.7!important;
-    white-space:pre-wrap!important;}
+    background:#fff!important;border:1px solid #e8f5e9!important;
+    border-left:4px solid #00833D!important;box-shadow:none!important;
+    text-align:left!important;padding:10px 14px!important;
+    border-radius:8px!important;width:100%!important;font-size:14px!important;
+    color:rgb(49,51,63)!important;margin:2px 0!important;
+    line-height:1.7!important;white-space:pre-wrap!important;}
 [data-testid="stExpander"] button[data-testid="baseButton-secondary"]:hover{
-    background:#f0faf4!important;
-    border-color:#00833D!important;
-    cursor:pointer!important;}
+    background:#f0faf4!important;border-color:#00833D!important;cursor:pointer!important;}
 </style>""", unsafe_allow_html=True)
 
-    # ── 已選商品 Pills（橫向並排）──────────────────────────────────
+    # ── 已選商品 Pills（橫向滑動，✕ 內嵌）────────────────────────
     if _cart:
-        _pill_items = list(_cart.items())
-        _pcols = st.columns([6, 1] * len(_pill_items))
-        for _ri, (_pn, _pi) in enumerate(_pill_items):
+        _ph = '<div class="pill-row">'
+        for _pn, _pi in _cart.items():
             _qty = _pi["qty"]
             _lbl = f"🛒 {_pn} ×{_qty}" if _qty > 1 else f"🛒 {_pn}"
-            _pcols[_ri * 2].markdown(f'<span class="cpill">{_lbl}</span>', unsafe_allow_html=True)
-            if _pcols[_ri * 2 + 1].button("✕", key=f"pill_rm_{_ri}",
-                                           use_container_width=True, help=f"移除 {_pn}"):
-                _c = dict(st.session_state.cart)
-                del _c[_pn]
-                st.session_state.cart = _c
-                st.rerun()
+            _ph += (f'<span class="cpill">{_lbl}'
+                    f'<a href="?rm_cart={_qe(_pn)}" class="rm">✕</a></span>')
+        _ph += '</div>'
         _total = sum(v["price"] * v["qty"] for v in _cart.values())
-        st.markdown(f'💰 **${_total}**')
+        _ph += f'<div style="font-size:12px;color:#555;margin:1px 0 4px;">💰 <b>${_total}</b></div>'
+        st.markdown(_ph, unsafe_allow_html=True)
 
-    # ── 已選課程 Pills（橫向並排）─────────────────────────────────
+    # ── 已選課程 Pills（橫向滑動，✕ 內嵌）────────────────────────
     _sel_courses = st.session_state.get("selected_courses", [])
     if _sel_courses:
-        _gcols = st.columns([6, 1] * len(_sel_courses))
-        for _gi, _cn in enumerate(_sel_courses):
-            _gcols[_gi * 2].markdown(f'<span class="cpill-gym">🏋️ {_cn}</span>', unsafe_allow_html=True)
-            if _gcols[_gi * 2 + 1].button("✕", key=f"course_rm_{_gi}",
-                                           use_container_width=True, help=f"移除 {_cn}"):
-                _sc = list(st.session_state.selected_courses)
-                _sc.remove(_cn)
-                st.session_state.selected_courses = _sc
-                st.rerun()
+        _gh = '<div class="pill-row">'
+        for _cn in _sel_courses:
+            _gh += (f'<span class="cpill-gym">🏋️ {_cn}'
+                    f'<a href="?rm_course={_qe(_cn)}" class="rm">✕</a></span>')
+        _gh += '</div>'
+        st.markdown(_gh, unsafe_allow_html=True)
         _enroll_label = f"✅ 確認報名（{len(_sel_courses)} 堂課）"
         if st.button(_enroll_label, type="primary", use_container_width=True, key="course_enroll_submit"):
             _names = "、".join(_sel_courses)
