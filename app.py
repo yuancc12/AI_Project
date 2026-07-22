@@ -6,6 +6,7 @@ import asyncio
 import streamlit as st
 import anthropic
 from datetime import datetime, date
+from urllib.parse import quote as _url_quote
 from app_helpers import (
     DB_PATH, _db,
     check_login, register_user, get_my_inquiries, update_user_reply,
@@ -747,6 +748,61 @@ VENDOR_EMOJI = {
     "康是美": "🔴",
     "統一生機": "🟣"
 }
+
+_VENDOR_BANNER = {
+    "7-11":     "#007B5E", "統一超商": "#007B5E",
+    "萬家福":   "#1565C0", "樂家康":   "#1565C0",
+    "康是美":   "#C62828", "Cosmed":   "#C62828",
+    "統一生機": "#5E35B1",
+    "Mister Donut": "#E65100",
+    "Cold Stone":   "#0277BD",
+    "21plus":       "#4A148C",
+    "統一星巴克":   "#00704A",
+    "聖德科斯":     "#2E7D32",
+}
+
+def _product_emoji(name: str) -> str:
+    n = name.lower()
+    if any(k in n for k in ["乳清", "蛋白粉", "protein", "whey"]): return "💪"
+    if any(k in n for k in ["雞胸", "雞肉", "雞排"]): return "🍗"
+    if any(k in n for k in ["鮭魚", "鮪魚", "魚排"]): return "🐟"
+    if any(k in n for k in ["牛肉", "牛排", "牛", "豬"]): return "🥩"
+    if any(k in n for k in ["蛋", "溫泉蛋", "茶葉蛋"]): return "🥚"
+    if any(k in n for k in ["豆腐", "豆漿", "豆"]): return "🫘"
+    if any(k in n for k in ["牛奶", "鮮奶", "奶粉", "乳品"]): return "🥛"
+    if any(k in n for k in ["優格", "酸奶", "yogurt"]): return "🍶"
+    if any(k in n for k in ["燕麥", "穀片", "麥片"]): return "🌾"
+    if any(k in n for k in ["咖啡", "latte", "cappuccino"]): return "☕"
+    if any(k in n for k in ["茶", "綠茶", "紅茶"]): return "🍵"
+    if any(k in n for k in ["甜甜圈", "donut", "doughnut"]): return "🍩"
+    if any(k in n for k in ["冰淇淋", "霜淇淋", "ice cream"]): return "🍦"
+    if any(k in n for k in ["蛋白棒", "能量棒", "bar", "棒"]): return "🍫"
+    if any(k in n for k in ["沙拉", "生菜", "蔬菜"]): return "🥗"
+    if any(k in n for k in ["便當", "飯糰"]): return "🍱"
+    if any(k in n for k in ["麵包", "吐司", "三明治"]): return "🥪"
+    if any(k in n for k in ["堅果", "腰果", "花生", "核桃"]): return "🥜"
+    if any(k in n for k in ["水果", "蘋果", "香蕉", "莓"]): return "🍎"
+    if any(k in n for k in ["啤酒", "酒", "紅酒"]): return "🍺"
+    if any(k in n for k in ["維他命", "膠原", "保健", "魚油"]): return "💊"
+    return "🛒"
+
+def _course_style(course_type: str) -> tuple:
+    """回傳 (banner_color, emoji)"""
+    _map = [
+        (["有氧", "踏步", "HIIT"], "#E65100", "🏃"),
+        (["重訓", "肌力", "槓鈴"], "#1A237E", "🏋️"),
+        (["瑜伽", "冥想", "yoga"], "#7B1FA2", "🧘"),
+        (["拳擊", "搏擊", "boxing"], "#B71C1C", "🥊"),
+        (["飛輪", "spin", "cycling"], "#0D47A1", "🚴"),
+        (["舞蹈", "舞", "dance"], "#880E4F", "💃"),
+        (["TRX", "懸吊", "功能"], "#1B5E20", "🤸"),
+        (["游泳", "水中", "swim"], "#006064", "🏊"),
+    ]
+    ct = course_type or ""
+    for keys, color, emo in _map:
+        if any(k in ct for k in keys):
+            return color, emo
+    return "#37474F", "⚡"
 TOOL_META    = {
     "search_grocery":         ("🔍", "商品關鍵字搜尋"),
     "recommend_high_protein": ("💪", "高蛋白目標推薦"),
@@ -818,6 +874,91 @@ def _render_store_map(stores: list, user_lat, user_lng):
         ).add_to(m)
 
     st_folium(m, width="100%", height=420, returned_objects=[])
+
+
+def _product_card(p: dict, key_prefix: str) -> str:
+    """生成單一商品的 LINE 卡片 HTML（純 HTML，用 ?add_cart= 觸發加入）"""
+    name    = p.get("name", "")
+    vendor  = p.get("vendor", "")
+    stock   = p.get("stock", 0)
+    price   = p.get("price", 0)
+    protein = p.get("protein_g", 0)
+    cal     = p.get("calories", 0)
+    banner  = _VENDOR_BANNER.get(vendor, "#607D8B")
+    emo     = _product_emoji(name)
+    qty     = st.session_state.get("cart", {}).get(name, {}).get("qty", 0)
+    st.session_state.setdefault("product_catalog", {})[name] = p
+    dimmed  = "opacity:.45;filter:grayscale(80%);" if stock == 0 else ""
+    badge   = (f'<div style="font-size:11px;font-weight:700;color:#00833D;margin:2px 0;">'
+               f'✓×{qty} 已選</div>') if qty > 0 else ""
+    if stock > 0:
+        btn_lbl = f"再加 ×{qty}" if qty > 0 else "＋ 加入"
+        btn = (f'<a href="?add_cart={_url_quote(name)}" '
+               f'style="display:block;text-align:center;text-decoration:none;'
+               f'background:#00833D;color:#fff;border-radius:999px;'
+               f'padding:6px 0;font-size:12px;font-weight:600;margin-top:8px;">'
+               f'{btn_lbl}</a>')
+    else:
+        btn = '<div style="text-align:center;color:#bbb;font-size:11px;margin-top:8px;">❌ 售完</div>'
+    return (
+        f'<div style="min-width:155px;max-width:175px;border-radius:16px;overflow:hidden;'
+        f'box-shadow:0 2px 10px rgba(0,0,0,.10);flex-shrink:0;background:#fff;'
+        f'border:1.5px solid #e8e8e8;{dimmed}">'
+        f'<div style="background:{banner};padding:22px 10px;text-align:center;'
+        f'font-size:42px;line-height:1.1;">{emo}</div>'
+        f'<div style="padding:10px 12px 12px;">'
+        f'<div style="font-weight:700;font-size:13px;color:#111;'
+        f'overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;'
+        f'-webkit-box-orient:vertical;">{name}</div>'
+        f'<div style="font-size:11px;color:#999;margin:2px 0;">{vendor}</div>'
+        f'<div style="font-size:11px;color:#555;margin:4px 0;line-height:1.6;">'
+        f'🥩 {protein}g &nbsp;·&nbsp; 🔥 {cal} kcal<br>'
+        f'💰 <b style="color:#d32f2f;">${price}</b> &nbsp;·&nbsp; 📦 {stock}</div>'
+        f'{badge}{btn}</div></div>'
+    )
+
+
+def _course_card(c: dict) -> str:
+    """生成單一課程的 LINE 卡片 HTML（?tog_course= 觸發切換）"""
+    cname   = c.get("course_name", "")
+    avail   = c.get("available_slots", 0)
+    banner, emo = _course_style(c.get("course_type", ""))
+    is_sel  = cname in st.session_state.get("selected_courses", [])
+    dimmed  = "" if avail > 0 else "opacity:.45;filter:grayscale(80%);"
+    avail_s = f"剩 {avail} 名" if avail > 0 else "已額滿"
+    badge   = ('<div style="font-size:11px;font-weight:700;color:#1565C0;margin:2px 0;">✓ 已選</div>'
+               if is_sel else "")
+    if avail > 0:
+        btn_lbl = "取消選擇" if is_sel else "＋ 選課"
+        btn_bg  = "#9E9E9E" if is_sel else "#1565C0"
+        btn = (f'<a href="?tog_course={_url_quote(cname)}" '
+               f'style="display:block;text-align:center;text-decoration:none;'
+               f'background:{btn_bg};color:#fff;border-radius:999px;'
+               f'padding:6px 0;font-size:12px;font-weight:600;margin-top:8px;">'
+               f'{btn_lbl}</a>')
+    else:
+        btn = '<div style="text-align:center;color:#bbb;font-size:11px;margin-top:8px;">已額滿</div>'
+    return (
+        f'<div style="min-width:155px;max-width:175px;border-radius:16px;overflow:hidden;'
+        f'box-shadow:0 2px 10px rgba(0,0,0,.10);flex-shrink:0;background:#fff;'
+        f'border:1.5px solid #e8e8e8;{dimmed}">'
+        f'<div style="background:{banner};padding:22px 10px;text-align:center;'
+        f'font-size:42px;line-height:1.1;">{emo}</div>'
+        f'<div style="padding:10px 12px 12px;">'
+        f'<div style="font-weight:700;font-size:13px;color:#111;'
+        f'overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;'
+        f'-webkit-box-orient:vertical;">{cname}</div>'
+        f'<div style="font-size:11px;color:#999;margin:2px 0;">{c.get("course_type","")}</div>'
+        f'<div style="font-size:11px;color:#555;margin:4px 0;line-height:1.6;">'
+        f'📅 {c.get("weekday","")} {c.get("time_start","")}<br>'
+        f'🧑‍🏫 {c.get("coach","")} · ⏱ {c.get("duration_min",0)}分<br>'
+        f'💰 NT${c.get("price_month",0)}/月 · 🪑 {avail_s}</div>'
+        f'{badge}{btn}</div></div>'
+    )
+
+
+_CAROUSEL_WRAP = ('<div style="display:flex;overflow-x:auto;gap:12px;padding:8px 2px 12px;'
+                  '-webkit-overflow-scrolling:touch;scrollbar-width:thin;">', '</div>')
 
 
 def render_tool_results(tool_calls: list, msg_idx: int = 0):
@@ -926,39 +1067,11 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                 products_rec = result.get("recommended_products", [])
                 if products_rec:
                     st.markdown("**🛒 推薦補充商品**")
-                    for _rp_idx, p in enumerate(products_rec):
-                        vendor  = p.get("vendor", "")
-                        emoji   = VENDOR_EMOJI.get(vendor, "⚪")
-                        _rpname = p.get("name", "")
-                        _rstock = p.get("stock", 0)
-                        if _rstock > 0:
-                            _rp_key   = f"cart_add_{msg_idx}_rec_{_rp_idx}"
-                            _cart_now = st.session_state.get("cart", {})
-                            _qty      = _cart_now.get(_rpname, {}).get("qty", 0)
-                            _badge    = f"  ✓×{_qty}" if _qty > 0 else ""
-                            _rlbl = (
-                                f"{emoji} {_rpname}{_badge} ｜ {vendor}\n"
-                                f"🥩 {p.get('protein_g',0)}g  🔥 {p.get('calories',0)} kcal"
-                                f"  💰 ${p.get('price',0)}  📦 庫存 {_rstock}"
-                            )
-                            if st.button(_rlbl, key=_rp_key, use_container_width=True):
-                                _cart_new = dict(st.session_state.get("cart", {}))
-                                if _rpname in _cart_new:
-                                    _cart_new[_rpname]["qty"] += 1
-                                else:
-                                    _cart_new[_rpname] = {
-                                        "name":      _rpname,
-                                        "qty":       1,
-                                        "price":     p.get("price", 0),
-                                        "vendor":    vendor,
-                                        "protein_g": p.get("protein_g", 0),
-                                        "calories":  p.get("calories", 0),
-                                        "stock":     _rstock,
-                                    }
-                                st.session_state.cart = _cart_new
-                                st.rerun()
-                        else:
-                            st.caption(f"~~{emoji} {_rpname}~~ ｜ {vendor} ｜ 已售完")
+                    _html = _CAROUSEL_WRAP[0]
+                    for p in products_rec:
+                        _html += _product_card(p, f"rec{msg_idx}")
+                    _html += _CAROUSEL_WRAP[1]
+                    st.markdown(_html, unsafe_allow_html=True)
             continue
 
         # ── 健身課程列表 ──────────────────────────────────────────────────────
@@ -968,32 +1081,11 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                 if not courses:
                     st.info(result.get("message", "暫無課程資料"))
                 else:
-                    _sel = st.session_state.get("selected_courses", [])
-                    for _ci, c in enumerate(courses):
-                        avail   = c.get("available_slots", 0)
-                        is_sel  = c["course_name"] in _sel
-                        _prefix = "✓ " if is_sel else "＋ "
-                        _avail_str = f"剩 {avail} 名" if avail > 0 else "已額滿"
-                        _clabel = (
-                            f"{_prefix}🏃 {c['course_name']}  "
-                            f"{c.get('weekday','')} {c.get('time_start','')} "
-                            f"（{c.get('duration_min',0)}分鐘）· "
-                            f"教練 {c.get('coach','')} · "
-                            f"NT${c.get('price_month',0)}/月 · {_avail_str}"
-                        )
-                        _ckey = f"course_sel_{msg_idx}_{_ci}"
-                        if avail > 0:
-                            if st.button(_clabel, key=_ckey, use_container_width=True):
-                                _courses = list(st.session_state.get("selected_courses", []))
-                                cname = c["course_name"]
-                                if cname in _courses:
-                                    _courses.remove(cname)
-                                else:
-                                    _courses.append(cname)
-                                st.session_state.selected_courses = _courses
-                                st.rerun()
-                        else:
-                            st.caption(f"~~🏃 {c['course_name']}~~  ·  {_avail_str}")
+                    _html = _CAROUSEL_WRAP[0]
+                    for c in courses:
+                        _html += _course_card(c)
+                    _html += _CAROUSEL_WRAP[1]
+                    st.markdown(_html, unsafe_allow_html=True)
             continue
 
         # ── 商品列表（search / recommend / inventory）────────────────────────
@@ -1012,39 +1104,11 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                 c3.metric("花費",       f"${result.get('total_price', 0)}")
                 st.divider()
 
-            for p_idx, p in enumerate(products):
-                vendor = p.get("vendor", "")
-                stock  = p.get("stock", 0)
-                emoji  = VENDOR_EMOJI.get(vendor, "⚪")
-                _pname = p.get("name", "")
-                if stock > 0:
-                    _cart_key = f"cart_add_{msg_idx}_{tool}_{p_idx}"
-                    _cart_now = st.session_state.get("cart", {})
-                    _qty      = _cart_now.get(_pname, {}).get("qty", 0)
-                    _badge    = f"  ✓×{_qty}" if _qty > 0 else ""
-                    _btn_label = (
-                        f"{emoji} {_pname}{_badge} ｜ {vendor}\n"
-                        f"🥩 {p.get('protein_g',0)} g  🔥 {p.get('calories',0)} kcal"
-                        f"  💰 ${p.get('price',0)}  📦 庫存 {stock}"
-                    )
-                    if st.button(_btn_label, key=_cart_key, use_container_width=True):
-                        _cart_new = dict(st.session_state.get("cart", {}))
-                        if _pname in _cart_new:
-                            _cart_new[_pname]["qty"] += 1
-                        else:
-                            _cart_new[_pname] = {
-                                "name":      _pname,
-                                "qty":       1,
-                                "price":     p.get("price", 0),
-                                "vendor":    vendor,
-                                "protein_g": p.get("protein_g", 0),
-                                "calories":  p.get("calories", 0),
-                                "stock":     stock,
-                            }
-                        st.session_state.cart = _cart_new
-                        st.rerun()
-                else:
-                    st.caption(f"~~{emoji} {_pname}~~ ｜ {vendor} ｜ 已售完")
+            _html = _CAROUSEL_WRAP[0]
+            for p in products:
+                _html += _product_card(p, f"{msg_idx}_{tool}")
+            _html += _CAROUSEL_WRAP[1]
+            st.markdown(_html, unsafe_allow_html=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1102,6 +1166,7 @@ for k, v in {
     "conversation_id":    None,
     "cart":               {},
     "selected_courses":   [],
+    "product_catalog":    {},
     "last_products":      [],
     "_pending_delete_id": None,
     "insurance_sign_no": "",
@@ -2342,8 +2407,8 @@ elif st.session_state.stage == "insurance_sign":
 
 elif st.session_state.stage == "chat":
 
-    # ── Pill ✕ 移除（query param 觸發）────────────────────────────
-    from urllib.parse import quote as _qe, unquote as _qd
+    # ── Query param handlers（卡片加入 / pill 移除）──────────────
+    _qe = _url_quote  # shorthand
     _rmc = st.query_params.get("rm_cart", "")
     if _rmc:
         _c = dict(st.session_state.get("cart", {}))
@@ -2358,6 +2423,38 @@ elif st.session_state.stage == "chat":
             _sc2.remove(_rmg)
         st.session_state.selected_courses = _sc2
         del st.query_params["rm_course"]
+        st.rerun()
+    _adc = st.query_params.get("add_cart", "")
+    if _adc:
+        _cat = st.session_state.get("product_catalog", {})
+        _prod = _cat.get(_adc, {})
+        if _prod:
+            _c2 = dict(st.session_state.get("cart", {}))
+            if _adc in _c2:
+                _c2[_adc]["qty"] += 1
+            else:
+                _c2[_adc] = {
+                    "name":      _adc,
+                    "qty":       1,
+                    "price":     _prod.get("price", 0),
+                    "vendor":    _prod.get("vendor", ""),
+                    "protein_g": _prod.get("protein_g", 0),
+                    "calories":  _prod.get("calories", 0),
+                    "stock":     _prod.get("stock", 0),
+                    "emoji":     _product_emoji(_adc),
+                }
+            st.session_state.cart = _c2
+        del st.query_params["add_cart"]
+        st.rerun()
+    _togc = st.query_params.get("tog_course", "")
+    if _togc:
+        _sc3 = list(st.session_state.get("selected_courses", []))
+        if _togc in _sc3:
+            _sc3.remove(_togc)
+        else:
+            _sc3.append(_togc)
+        st.session_state.selected_courses = _sc3
+        del st.query_params["tog_course"]
         st.rerun()
 
     using_claude = bool(st.session_state.api_key)
@@ -2502,14 +2599,12 @@ elif st.session_state.stage == "chat":
 
     # ── 已選商品 Pills（chat_input 正上方，融入聊天區域）───────────────
     _cart = st.session_state.get("cart", {})
-    # ── Pills + 商品卡片 共用 CSS ────────────────────────────────
+    # ── Pills 共用 CSS ───────────────────────────────────────────
     st.markdown("""<style>
-/* 橫向滑動 pill 行 */
 .pill-row{display:flex;overflow-x:auto;gap:8px;padding:6px 2px 6px;
           -webkit-overflow-scrolling:touch;scrollbar-width:thin;}
 .pill-row::-webkit-scrollbar{height:4px;}
 .pill-row::-webkit-scrollbar-thumb{background:#c8e6c9;border-radius:9px;}
-/* 購物車 pill（綠） */
 .cpill{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;
        background:#e8f5e9;border:1.5px solid #00833D;border-radius:999px;
        padding:4px 10px 4px 12px;font-size:13px;color:#1a5c35;font-weight:600;
@@ -2517,7 +2612,6 @@ elif st.session_state.stage == "chat":
 .cpill .rm{font-size:11px;font-weight:700;opacity:.6;line-height:1;
            padding:0 2px;text-decoration:none;color:inherit;}
 .cpill .rm:hover{opacity:1;}
-/* 課程 pill（藍） */
 .cpill-gym{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;
            background:#e3f2fd;border:1.5px solid #1565C0;border-radius:999px;
            padding:4px 10px 4px 12px;font-size:13px;color:#1a3a6b;font-weight:600;
@@ -2525,25 +2619,16 @@ elif st.session_state.stage == "chat":
 .cpill-gym .rm{font-size:11px;font-weight:700;opacity:.6;line-height:1;
                padding:0 2px;text-decoration:none;color:inherit;}
 .cpill-gym .rm:hover{opacity:1;}
-/* Expander 內商品/課程按鈕：移除 button 框，整張卡片可點 */
-[data-testid="stExpander"] button[data-testid="baseButton-secondary"]{
-    background:#fff!important;border:1px solid #e8f5e9!important;
-    border-left:4px solid #00833D!important;box-shadow:none!important;
-    text-align:left!important;padding:10px 14px!important;
-    border-radius:8px!important;width:100%!important;font-size:14px!important;
-    color:rgb(49,51,63)!important;margin:2px 0!important;
-    line-height:1.7!important;white-space:pre-wrap!important;}
-[data-testid="stExpander"] button[data-testid="baseButton-secondary"]:hover{
-    background:#f0faf4!important;border-color:#00833D!important;cursor:pointer!important;}
 </style>""", unsafe_allow_html=True)
 
-    # ── 已選商品 Pills（橫向滑動，✕ 內嵌）────────────────────────
+    # ── 已選商品 Pills（橫向滑動，✕ 內嵌，帶 emoji）────────────
     if _cart:
         _ph = '<div class="pill-row">'
         for _pn, _pi in _cart.items():
-            _qty = _pi["qty"]
-            _lbl = f"🛒 {_pn} ×{_qty}" if _qty > 1 else f"🛒 {_pn}"
-            _ph += (f'<span class="cpill">{_lbl}'
+            _qty  = _pi["qty"]
+            _emo  = _pi.get("emoji") or _product_emoji(_pn)
+            _cnt  = f" ×{_qty}" if _qty > 1 else ""
+            _ph += (f'<span class="cpill">{_emo} {_pn}{_cnt}'
                     f'<a href="?rm_cart={_qe(_pn)}" class="rm">✕</a></span>')
         _ph += '</div>'
         _total = sum(v["price"] * v["qty"] for v in _cart.values())
@@ -2581,11 +2666,21 @@ elif st.session_state.stage == "chat":
                 {"name": n, "vendor": v.get("vendor",""), "price": v["price"], "qty": v["qty"]}
                 for n, v in _ocart.items()
             ]
+            # 從 mcp_log 回溯最近一次推薦/搜尋的 budget、goal、keyword
+            _last_budget, _last_goal, _last_kw = 0, "商品採買", ""
+            for _ml in reversed(st.session_state.get("mcp_log", [])):
+                if _ml["tool"] in ("recommend_high_protein", "search_grocery"):
+                    _last_budget = int(_ml.get("params", {}).get("budget", 0) or 0)
+                    _last_goal   = _ml.get("params", {}).get("goal", "商品採買") or "商品採買"
+                    _last_kw     = _ml.get("params", {}).get("keyword", "") or ""
+                    break
             st.session_state.inquiry_prefill = {
-                "goal":          "商品採買",
+                "goal":          _last_goal,
                 "contact_name":  st.session_state.get("username", ""),
                 "contact_phone": st.session_state.get("user_contact_phone", ""),
                 "address":       st.session_state.get("user_address", ""),
+                "budget":        _last_budget,
+                "keyword":       _last_kw,
                 "products_json": json.dumps(_olist, ensure_ascii=False),
             }
             st.session_state.inquiry_products = list(_ocart.values())
