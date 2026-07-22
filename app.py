@@ -935,12 +935,11 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                             _rp_key   = f"cart_add_{msg_idx}_rec_{_rp_idx}"
                             _cart_now = st.session_state.get("cart", {})
                             _qty      = _cart_now.get(_rpname, {}).get("qty", 0)
-                            _prefix   = f"✓×{_qty} " if _qty > 0 else "＋ "
+                            _badge    = f"  ✓×{_qty}" if _qty > 0 else ""
                             _rlbl = (
-                                f"{_prefix}{emoji} {_rpname}  "
-                                f"${p.get('price',0)} · {vendor} · "
-                                f"蛋白質{p.get('protein_g',0)}g · {p.get('calories',0)}kcal · "
-                                f"庫存{_rstock}"
+                                f"{emoji} {_rpname}{_badge} ｜ {vendor}\n"
+                                f"🥩 {p.get('protein_g',0)}g  🔥 {p.get('calories',0)} kcal"
+                                f"  💰 ${p.get('price',0)}  📦 庫存 {_rstock}"
                             )
                             if st.button(_rlbl, key=_rp_key, use_container_width=True):
                                 _cart_new = dict(st.session_state.get("cart", {}))
@@ -959,7 +958,7 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                                 st.session_state.cart = _cart_new
                                 st.rerun()
                         else:
-                            st.caption(f"~~{emoji} {_rpname}~~  ·  {vendor}  ·  已售完")
+                            st.caption(f"~~{emoji} {_rpname}~~ ｜ {vendor} ｜ 已售完")
             continue
 
         # ── 健身課程列表 ──────────────────────────────────────────────────────
@@ -1022,12 +1021,11 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                     _cart_key = f"cart_add_{msg_idx}_{tool}_{p_idx}"
                     _cart_now = st.session_state.get("cart", {})
                     _qty      = _cart_now.get(_pname, {}).get("qty", 0)
-                    _prefix   = f"✓×{_qty} " if _qty > 0 else "＋ "
+                    _badge    = f"  ✓×{_qty}" if _qty > 0 else ""
                     _btn_label = (
-                        f"{_prefix}{emoji} {_pname}  "
-                        f"${p.get('price',0)} · {vendor} · "
-                        f"蛋白質{p.get('protein_g',0)}g · {p.get('calories',0)}kcal · "
-                        f"庫存{stock}"
+                        f"{emoji} {_pname}{_badge} ｜ {vendor}\n"
+                        f"🥩 {p.get('protein_g',0)} g  🔥 {p.get('calories',0)} kcal"
+                        f"  💰 ${p.get('price',0)}  📦 庫存 {stock}"
                     )
                     if st.button(_btn_label, key=_cart_key, use_container_width=True):
                         _cart_new = dict(st.session_state.get("cart", {}))
@@ -1046,7 +1044,7 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                         st.session_state.cart = _cart_new
                         st.rerun()
                 else:
-                    st.caption(f"~~{emoji} {_pname}~~  ·  {vendor}  ·  已售完")
+                    st.caption(f"~~{emoji} {_pname}~~ ｜ {vendor} ｜ 已售完")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2486,43 +2484,64 @@ elif st.session_state.stage == "chat":
 
     # ── 已選商品 Pills（chat_input 正上方，融入聊天區域）───────────────
     _cart = st.session_state.get("cart", {})
-    if _cart:
-        st.markdown("""<style>
+    # ── Pills 共用 CSS（商品卡片無框化 + pill 樣式）────────────────
+    st.markdown("""<style>
 .cpill{display:inline-block;background:#e8f5e9;border:1.5px solid #00833D;
        border-radius:999px;padding:3px 13px;font-size:13px;color:#1a5c35;
        font-weight:600;white-space:nowrap;line-height:1.6;}
-/* 移除按鈕縮小化 */
+.cpill-gym{display:inline-block;background:#e3f2fd;border:1.5px solid #1565C0;
+           border-radius:999px;padding:3px 13px;font-size:13px;color:#1a3a6b;
+           font-weight:600;white-space:nowrap;line-height:1.6;}
+/* ✕ 按鈕縮小化 */
 div[data-testid="stHorizontalBlock"] button[kind="secondary"]{
     padding:2px 6px!important;font-size:12px!important;
     border-radius:999px!important;min-height:0!important;}
+/* Expander 內商品/課程按鈕：移除框線，整張卡片可點 */
+[data-testid="stExpander"] button[data-testid="baseButton-secondary"]{
+    background:#fff!important;
+    border:1px solid #e8f5e9!important;
+    border-left:4px solid #00833D!important;
+    box-shadow:none!important;
+    text-align:left!important;
+    padding:10px 14px!important;
+    border-radius:8px!important;
+    width:100%!important;
+    font-size:14px!important;
+    color:rgb(49,51,63)!important;
+    margin:2px 0!important;
+    line-height:1.7!important;
+    white-space:pre-wrap!important;}
+[data-testid="stExpander"] button[data-testid="baseButton-secondary"]:hover{
+    background:#f0faf4!important;
+    border-color:#00833D!important;
+    cursor:pointer!important;}
 </style>""", unsafe_allow_html=True)
 
-        for _ri, (_pn, _pi) in enumerate(list(_cart.items())):
+    # ── 已選商品 Pills（橫向並排）──────────────────────────────────
+    if _cart:
+        _pill_items = list(_cart.items())
+        _pcols = st.columns([6, 1] * len(_pill_items))
+        for _ri, (_pn, _pi) in enumerate(_pill_items):
             _qty = _pi["qty"]
             _lbl = f"🛒 {_pn} ×{_qty}" if _qty > 1 else f"🛒 {_pn}"
-            _pc, _prm = st.columns([7, 1])
-            _pc.markdown(f'<span class="cpill">{_lbl}</span>', unsafe_allow_html=True)
-            if _prm.button("✕", key=f"pill_rm_{_ri}", use_container_width=True, help=f"移除 {_pn}"):
+            _pcols[_ri * 2].markdown(f'<span class="cpill">{_lbl}</span>', unsafe_allow_html=True)
+            if _pcols[_ri * 2 + 1].button("✕", key=f"pill_rm_{_ri}",
+                                           use_container_width=True, help=f"移除 {_pn}"):
                 _c = dict(st.session_state.cart)
                 del _c[_pn]
                 st.session_state.cart = _c
                 st.rerun()
-
         _total = sum(v["price"] * v["qty"] for v in _cart.values())
         st.markdown(f'💰 **${_total}**')
 
-    # ── 已選課程 Pills ──────────────────────────────────────────────
+    # ── 已選課程 Pills（橫向並排）─────────────────────────────────
     _sel_courses = st.session_state.get("selected_courses", [])
     if _sel_courses:
-        st.markdown("""<style>
-.cpill-gym{display:inline-block;background:#e3f2fd;border:1.5px solid #1565C0;
-           border-radius:999px;padding:3px 13px;font-size:13px;color:#1a3a6b;
-           font-weight:600;white-space:nowrap;line-height:1.6;}
-</style>""", unsafe_allow_html=True)
-        for _gi, _cn in enumerate(list(_sel_courses)):
-            _gc, _grm = st.columns([7, 1])
-            _gc.markdown(f'<span class="cpill-gym">🏋️ {_cn}</span>', unsafe_allow_html=True)
-            if _grm.button("✕", key=f"course_rm_{_gi}", use_container_width=True, help=f"移除 {_cn}"):
+        _gcols = st.columns([6, 1] * len(_sel_courses))
+        for _gi, _cn in enumerate(_sel_courses):
+            _gcols[_gi * 2].markdown(f'<span class="cpill-gym">🏋️ {_cn}</span>', unsafe_allow_html=True)
+            if _gcols[_gi * 2 + 1].button("✕", key=f"course_rm_{_gi}",
+                                           use_container_width=True, help=f"移除 {_cn}"):
                 _sc = list(st.session_state.selected_courses)
                 _sc.remove(_cn)
                 st.session_state.selected_courses = _sc
