@@ -57,7 +57,8 @@ python mcp_server.py --selftest
 | `vendor_dashboard.py` | 廠商後台（庫存 / 諮詢單 / AI 派送 / MCP 總覽 / 外送 / 課程） |
 | `vendor_helpers.py` | 後台 DB 操作、廠商帳號管理、Email 輔助、MCP_TOOLS 定義 |
 | `butler.db` | SQLite 資料庫（`seed.py` 執行後產生） |
-| `.env` | API 金鑰（SMTP / Spoonacular / TDX / Edamam） |
+| `.env` | API 金鑰（SMTP / Spoonacular / TDX / ENCRYPT_KEY） |
+| `requirements.txt` | 全部依賴（含 `cryptography` / `streamlit-drawable-canvas` / `folium`） |
 
 ---
 
@@ -156,9 +157,9 @@ python mcp_server.py --selftest
 fitness_product          — 統一集團商品（56 筆，9 大通路）
 cms_homepage_service_vendor — 服務通路（7-ELEVEN 等 9 個）
 partner_vendor           — 合作廠商（Being Sport / 統一速達 / 統超保險 / 統一證券等）
-pms_form_feedback        — 諮詢單（status: 待處理/待簽名/待後台確認/預留中/配送中/已拒絕/已完成）
+pms_form_feedback        — 諮詢單（feedback_no: 14 碼純數字；status: 01待處理/02配送中/03預留中/04待簽名/05待後台確認/80已完成/90已拒絕；姓名/電話/地址 AES-256-GCM 加密）
 mms_order_record         — 外送派件單（order_no: ORDYYMMDDxxxxxx）
-users                    — 消費者帳號（含 email, county_code, district_code, address）
+users                    — 消費者帳號（含 email, county_code, district_code, address, uuid）
 vendor_users             — 廠商/後台帳號（15 個預設帳號）
 conversation             — AI 對話歷史（app 啟動時自建）
 gym_course               — 健身課程
@@ -178,6 +179,7 @@ SMTP_USER=your@gmail.com
 SMTP_PASS=your_app_password
 TDX_CLIENT_ID=            # 交通部 TDX 觀光 API（tdx.transportdata.tw）
 TDX_CLIENT_SECRET=
+ENCRYPT_KEY=              # AES-256-GCM 金鑰：64 位十六進位或 base64-32byte；留空使用內建預設值
 ```
 
 ---
@@ -189,3 +191,23 @@ TDX_CLIENT_SECRET=
 | 雲端（前端預設） | Claude Sonnet `claude-sonnet-4-6` | 登入頁輸入 Anthropic API Key |
 | 本地 | Ollama `qwen2.5:7b` | 自動偵測 `http://localhost:11434` |
 | 後台 AI 助手 | Ollama `qwen2.5:7b` | 固定本地，呼叫 `dispatch_delivery` |
+
+---
+
+## 安全性
+
+| 機制 | 說明 |
+|------|------|
+| **AES-256-GCM 加密** | `pms_form_feedback` 中姓名、電話、地址、Email 於寫入 DB 前加密；讀取時後台自動解密顯示 |
+| **SHA-256 雜湊** | `contact_phone`（雜湊版本）用於快速查詢比對，不還原原始值 |
+| **UUID（RFC 4122）** | `users.uuid` 作為官方 `inbr_account_id`，與真實帳號資料解耦 |
+| **金鑰管理** | `ENCRYPT_KEY` 環境變數；未設定時自動派生預設金鑰（展示用，生產請務必設定） |
+
+---
+
+## 前端 UI 特色
+
+- **LINE 卡片式**：商品、課程以卡片呈現，整張可點選
+- **購物車 Pills**：點選商品/課程即加入輸入框上方的橢圓標籤，支援橫向滑動，✕ 移除，一鍵帶入諮詢單
+- **旅遊保險簽名**：前端內嵌手寫電子簽名（`streamlit-drawable-canvas`）
+- **地圖整合**：Folium 互動地圖顯示附近門市與路線規劃結果
