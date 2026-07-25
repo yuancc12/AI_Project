@@ -47,6 +47,38 @@ try:
 except ImportError:
     _HAS_GEO = False
 
+# ── AWS S3 上傳輔助（EC2 重啟後本地 uploads/ 消失，改存 S3）────────────────────
+try:
+    import boto3 as _boto3_app
+    _S3_BUCKET  = os.getenv("S3_BUCKET", "")
+    _AWS_REGION = os.getenv("AWS_REGION", "ap-northeast-1")
+    _HAS_S3 = bool(_S3_BUCKET)
+except ImportError:
+    _boto3_app  = None
+    _S3_BUCKET  = ""
+    _AWS_REGION = "ap-northeast-1"
+    _HAS_S3     = False
+
+
+def _save_upload(file_bytes: bytes, filename: str, content_type: str = "image/png") -> str:
+    """儲存上傳檔案：優先 S3，fallback 本地 uploads/ 目錄。
+    回傳路徑字串（S3 用 s3://bucket/key，本地用相對路徑）。
+    """
+    if _HAS_S3 and _boto3_app:
+        try:
+            key = f"uploads/{filename}"
+            s3  = _boto3_app.client("s3", region_name=_AWS_REGION)
+            s3.put_object(Bucket=_S3_BUCKET, Key=key, Body=file_bytes, ContentType=content_type)
+            return f"s3://{_S3_BUCKET}/{key}"
+        except Exception:
+            pass  # fallback to local
+    # 本地 fallback
+    os.makedirs(os.path.join(_HERE, "uploads"), exist_ok=True)
+    local_path = os.path.join(_HERE, "uploads", filename)
+    with open(local_path, "wb") as _f:
+        _f.write(file_bytes)
+    return os.path.join("uploads", filename)
+
 @st.dialog("🗑️ 確認刪除對話")
 def _delete_confirm_dialog(conv_id: int, title: str):
     st.write(f"確定要刪除「**{title[:24]}**」嗎？")
@@ -1968,17 +2000,14 @@ elif st.session_state.stage == "inquiry_form":
                 products_json_str = json.dumps(selected_products, ensure_ascii=False) if selected_products else ""
                 kw = prefill.get("keyword", "")
 
-                # 儲存上傳圖片到本地 uploads/ 目錄
-                import uuid as _uuid, os as _os
+                # 儲存上傳圖片（S3 或本地 uploads/）
+                import uuid as _uuid
                 _img_paths = []
                 if uploaded_imgs:
-                    _os.makedirs("uploads", exist_ok=True)
                     for _f in uploaded_imgs:
-                        _ext = _f.name.rsplit(".", 1)[-1].lower() if "." in _f.name else "jpg"
+                        _ext   = _f.name.rsplit(".", 1)[-1].lower() if "." in _f.name else "jpg"
                         _fname = f"{datetime.now().strftime('%Y%m%d')}_{_uuid.uuid4().hex[:8]}.{_ext}"
-                        _fpath = f"uploads/{_fname}"
-                        with open(_fpath, "wb") as _out:
-                            _out.write(_f.read())
+                        _fpath = _save_upload(_f.read(), _fname, f"image/{_ext}")
                         _img_paths.append(_fpath)
 
                 params = {
@@ -2372,16 +2401,17 @@ elif st.session_state.stage == "insurance_sign":
         key="policy_sign_submit",
     ):
         with st.spinner("📡 提交簽名中..."):
-            import uuid as _uuid2, os as _os2
-            _os2.makedirs("uploads", exist_ok=True)
+            import uuid as _uuid2
             _sig_path_s = ""
             if _HAS_CANVAS_S and _sig_img_data_s is not None:
                 try:
+                    import io as _io
                     from PIL import Image as _PILImage2
                     _pil2 = _PILImage2.fromarray(_sig_img_data_s.astype("uint8"), "RGBA")
                     _sig_fname2 = f"sig_{_uuid2.uuid4().hex[:8]}.png"
-                    _sig_path_s = f"uploads/{_sig_fname2}"
-                    _pil2.save(_sig_path_s)
+                    _buf = _io.BytesIO()
+                    _pil2.save(_buf, format="PNG")
+                    _sig_path_s = _save_upload(_buf.getvalue(), _sig_fname2, "image/png")
                 except Exception:
                     pass
             elif _sig_text_s:

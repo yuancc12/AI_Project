@@ -207,8 +207,11 @@ MCP_TOOLS = [
 
 # ── Ollama 本地 AI + 真實 MCP 呼叫（後台版）────────────────────────────────
 
-_ollama = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
-OLLAMA_MODEL = "qwen2.5:7b"
+_ollama = OpenAI(
+    base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/v1",
+    api_key="ollama",
+)
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
 ADMIN_SYSTEM = """\
 你是「後台採買管理助手」，協助後台人員處理健康採買諮詢單的派送事宜。
@@ -441,7 +444,8 @@ def admin_ollama_chat(prompt: str, history: list) -> tuple:
 # ── DB helpers ──────────────────────────────────────────────────────────────
 
 def _db():
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
+    con.execute("PRAGMA busy_timeout=30000")
     con.row_factory = sqlite3.Row
     return con
 

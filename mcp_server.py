@@ -22,6 +22,16 @@ from datetime import datetime
 from typing import Optional
 from mcp.server import MCPServer
 
+# ── AWS boto3（選用；未安裝或未設定憑證時靜默退化）──────────────────────────────
+try:
+    import boto3 as _boto3
+    _AWS_REGION = os.getenv("AWS_REGION", "ap-northeast-1")
+    _HAS_BOTO3  = True
+except ImportError:
+    _boto3      = None
+    _AWS_REGION = "ap-northeast-1"
+    _HAS_BOTO3  = False
+
 
 # ---------------------------------------------------------------------------
 # AES-256-GCM 加密 / SHA-256 雜湊（官方 schema 聯絡欄位加密）
@@ -70,6 +80,24 @@ if os.path.exists(_env_file):
 
 DB = os.path.join(os.path.dirname(__file__), "butler.db")
 mcp = MCPServer("life-butler")
+
+# ── AWS Secrets Manager：啟動時自動載入金鑰（EC2 + IAM Role 免 Key 即可用）──────
+def _load_aws_secrets():
+    """從 AWS Secrets Manager 載入 JSON 金鑰並注入 os.environ。
+    需設 AWS_SECRET_NAME（如 butler-app-secrets）；EC2 掛 IAM Role 後免 Access Key。
+    """
+    secret_name = os.getenv("AWS_SECRET_NAME", "")
+    if not secret_name or not _HAS_BOTO3:
+        return
+    try:
+        sm = _boto3.client("secretsmanager", region_name=_AWS_REGION)
+        resp = sm.get_secret_value(SecretId=secret_name)
+        for k, v in json.loads(resp.get("SecretString", "{}")).items():
+            os.environ.setdefault(k, str(v))
+    except Exception:
+        pass  # 失敗時繼續用 .env
+
+_load_aws_secrets()
 
 
 def _ensure_schema():
@@ -437,7 +465,9 @@ def _ensure_schema():
 
 
 def _db():
-    con = sqlite3.connect(DB)
+    # timeout=10 + busy_timeout 防止 EC2 上 8501/8502 雙 port 並發寫入的 SQLITE_BUSY
+    con = sqlite3.connect(DB, timeout=10)
+    con.execute("PRAGMA busy_timeout=30000")
     con.row_factory = sqlite3.Row
     return con
 
@@ -813,9 +843,46 @@ def submit_inquiry(goal: str, contact_name: str, contact_phone: str,
 # ---------------------------------------------------------------------------
 
 def _send_email(to_email: str, subject: str, body: str) -> bool:
-    """用環境變數設定的 SMTP 發信，成功回傳 True，失敗靜默回傳 False。
-    需在 .env 設定：SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS
+    """Email 發送：優先 Lambda 非同步 → AWS SES → SMTP fallback。
+    Lambda：需設 LAMBDA_EMAIL_FN（Lambda 函式名稱）
+    SES：需設 SES_FROM_EMAIL（已驗證寄件地址）+ AWS 憑證/IAM Role
+    SMTP：需設 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS（本地開發 fallback）
     """
+    # ── 1. AWS Lambda（非同步 InvocationType=Event，不阻塞）──────────────────
+    lambda_fn = os.getenv("LAMBDA_EMAIL_FN", "")
+    if lambda_fn and _HAS_BOTO3:
+        try:
+            lam = _boto3.client("lambda", region_name=_AWS_REGION)
+            lam.invoke(
+                FunctionName=lambda_fn,
+                InvocationType="Event",
+                Payload=json.dumps(
+                    {"to_email": to_email, "subject": subject, "body": body},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            return True
+        except Exception:
+            pass  # 降級到 SES
+
+    # ── 2. AWS SES（同步）────────────────────────────────────────────────────
+    ses_from = os.getenv("SES_FROM_EMAIL", os.getenv("SMTP_USER", ""))
+    if ses_from and _HAS_BOTO3:
+        try:
+            ses = _boto3.client("ses", region_name=_AWS_REGION)
+            ses.send_email(
+                Source=ses_from,
+                Destination={"ToAddresses": [to_email]},
+                Message={
+                    "Subject": {"Data": subject, "Charset": "UTF-8"},
+                    "Body":    {"Text": {"Data": body,    "Charset": "UTF-8"}},
+                },
+            )
+            return True
+        except Exception:
+            pass  # 降級到 SMTP
+
+    # ── 3. SMTP fallback（本地開發 / 未設定 AWS 時）──────────────────────────
     host = os.getenv("SMTP_HOST", "")
     port = int(os.getenv("SMTP_PORT", "587"))
     user = os.getenv("SMTP_USER", "")
