@@ -671,7 +671,11 @@ COURSE_ENROLLMENTS = [
 
 
 def main():
+    # 保護：EC2 上 DB 已存在時，必須明確設定 ALLOW_SEED_RESET=yes 才能重建
     if os.path.exists(DB):
+        if os.getenv("ALLOW_SEED_RESET", "").lower() not in ("yes", "1", "true"):
+            print(f"[seed] butler.db 已存在，略過重建。如需強制重建請設 ALLOW_SEED_RESET=yes")
+            return
         os.remove(DB)
     con = sqlite3.connect(DB)
     cur = con.cursor()

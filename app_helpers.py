@@ -15,9 +15,47 @@ import anthropic
 from openai import OpenAI
 from mcp import Client
 
+# ── AWS boto3（選用；EC2 掛 IAM Role 後免 Access Key）────────────────────────
+try:
+    import boto3 as _boto3
+    _AWS_REGION = os.getenv("AWS_REGION", "ap-northeast-1")
+    _HAS_BOTO3  = True
+except ImportError:
+    _boto3      = None
+    _AWS_REGION = "ap-northeast-1"
+    _HAS_BOTO3  = False
+
+# ── AWS Secrets Manager：載入 API 金鑰（取代 .env 明文）─────────────────────
+def _load_aws_secrets():
+    secret_name = os.getenv("AWS_SECRET_NAME", "")
+    if not secret_name or not _HAS_BOTO3:
+        return
+    try:
+        sm = _boto3.client("secretsmanager", region_name=_AWS_REGION)
+        resp = sm.get_secret_value(SecretId=secret_name)
+        for k, v in json.loads(resp.get("SecretString", "{}")).items():
+            os.environ.setdefault(k, str(v))
+    except Exception:
+        pass
+
+_load_aws_secrets()
+
+# ── DynamoDB 對話後端設定（設 DYNAMO_TABLE 即啟用）────────────────────────────
+_DYNAMO_CONV_TABLE = os.getenv("DYNAMO_TABLE", "")
+
+def _dynamo_conv_table():
+    """回傳 DynamoDB Table 物件；未設定或失敗時回傳 None。"""
+    if not _DYNAMO_CONV_TABLE or not _HAS_BOTO3:
+        return None
+    try:
+        return _boto3.resource("dynamodb", region_name=_AWS_REGION).Table(_DYNAMO_CONV_TABLE)
+    except Exception:
+        return None
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 DB_PATH = os.path.join(_HERE, "butler.db")
+# EC2 上 DB 可掛 EBS 持久化；首次啟動自動建立，不會 DROP 現有資料
 if not os.path.exists(DB_PATH):
     import seed as _seed
     _seed.main()
@@ -42,14 +80,19 @@ from mcp_server import (
     mcp as _mcp,
 )
 
-_ollama = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
-OLLAMA_MODEL = "qwen2.5:7b"
+_ollama = OpenAI(
+    base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/v1",
+    api_key="ollama",
+)
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 def _db():
-    con = sqlite3.connect(DB_PATH)
+    # timeout=10 + busy_timeout 防止 EC2 雙 Streamlit port 並發的 SQLITE_BUSY
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    con.execute("PRAGMA busy_timeout=30000")
     con.row_factory = sqlite3.Row
     return con
 
@@ -146,13 +189,39 @@ def update_user_reply(feedback_no: str, message: str, username: str = "用戶"):
     con.close()
 
 
-def delete_conversation(conv_id: int):
+def delete_conversation(conv_id):
+    # ── DynamoDB 路徑 ─────────────────────────────────────────────────────────
+    if _DYNAMO_CONV_TABLE and isinstance(conv_id, str) and conv_id.startswith("dyn:"):
+        try:
+            _, uid, cid = conv_id.split(":", 2)
+            tbl = _dynamo_conv_table()
+            if tbl is not None:
+                tbl.delete_item(Key={"user_id": uid, "conv_id": cid})
+                return
+        except Exception:
+            pass
+    # ── SQLite 路徑 ────────────────────────────────────────────────────────────
     con = _db()
     con.execute("DELETE FROM conversation WHERE id=?", (conv_id,))
     con.commit(); con.close()
 
 
-def rename_conversation(conv_id: int, new_title: str):
+def rename_conversation(conv_id, new_title: str):
+    # ── DynamoDB 路徑 ─────────────────────────────────────────────────────────
+    if _DYNAMO_CONV_TABLE and isinstance(conv_id, str) and conv_id.startswith("dyn:"):
+        try:
+            _, uid, cid = conv_id.split(":", 2)
+            tbl = _dynamo_conv_table()
+            if tbl is not None:
+                tbl.update_item(
+                    Key={"user_id": uid, "conv_id": cid},
+                    UpdateExpression="SET title = :t",
+                    ExpressionAttributeValues={":t": new_title.strip()},
+                )
+                return
+        except Exception:
+            pass
+    # ── SQLite 路徑 ────────────────────────────────────────────────────────────
     con = _db()
     con.execute("UPDATE conversation SET title=? WHERE id=?", (new_title.strip(), conv_id))
     con.commit(); con.close()
@@ -309,6 +378,22 @@ _ensure_county_data()
 
 
 def get_conversations(user_id: int, limit: int = 25) -> list:
+    # ── DynamoDB 路徑（設 DYNAMO_TABLE 時啟用）────────────────────────────────
+    if _DYNAMO_CONV_TABLE:
+        try:
+            from boto3.dynamodb.conditions import Key
+            tbl = _dynamo_conv_table()
+            if tbl is not None:
+                resp  = tbl.query(KeyConditionExpression=Key("user_id").eq(str(user_id)))
+                items = sorted(resp.get("Items", []),
+                               key=lambda x: x.get("updated_at", ""), reverse=True)[:limit]
+                return [{"id":         f"dyn:{user_id}:{i['conv_id']}",
+                         "title":      i.get("title", ""),
+                         "updated_at": i.get("updated_at", "")}
+                        for i in items]
+        except Exception:
+            pass  # fallback SQLite
+    # ── SQLite 路徑 ────────────────────────────────────────────────────────────
     con = _db()
     rows = con.execute(
         "SELECT id, title, updated_at FROM conversation "
@@ -319,14 +404,33 @@ def get_conversations(user_id: int, limit: int = 25) -> list:
     return [dict(r) for r in rows]
 
 
-def load_conv_from_db(conv_id: int) -> dict:
+def load_conv_from_db(conv_id) -> dict:
+    # ── DynamoDB 路徑：conv_id 格式 "dyn:<user_id>:<uuid>" ────────────────────
+    if _DYNAMO_CONV_TABLE and isinstance(conv_id, str) and conv_id.startswith("dyn:"):
+        try:
+            _, uid, cid = conv_id.split(":", 2)
+            tbl = _dynamo_conv_table()
+            if tbl is not None:
+                item = tbl.get_item(Key={"user_id": uid, "conv_id": cid}).get("Item", {})
+                if item:
+                    return {
+                        "id":          conv_id,
+                        "title":       item.get("title", ""),
+                        "disp_json":   item.get("disp_json", "[]"),
+                        "ollama_json": item.get("ollama_json", "[]"),
+                        "updated_at":  item.get("updated_at", ""),
+                    }
+        except Exception:
+            pass
+    # ── SQLite 路徑 ────────────────────────────────────────────────────────────
     con = _db()
     row = con.execute("SELECT * FROM conversation WHERE id=?", (conv_id,)).fetchone()
     con.close()
     return dict(row) if row else {}
 
 
-def save_conv_to_db(user_id: int, conv_id, display_msgs: list, ollama_history: list) -> int:
+def save_conv_to_db(user_id: int, conv_id, display_msgs: list, ollama_history: list):
+    """儲存對話歷史；DynamoDB 啟用時回傳 "dyn:<user_id>:<uuid>"，否則回傳 SQLite int id。"""
     title = "新對話"
     for msg in display_msgs:
         content = (msg.get("content") or "").strip()
@@ -336,14 +440,37 @@ def save_conv_to_db(user_id: int, conv_id, display_msgs: list, ollama_history: l
     now = datetime.now().isoformat()
     dj  = json.dumps(display_msgs,   ensure_ascii=False)
     oj  = json.dumps(ollama_history,  ensure_ascii=False)
+
+    # ── DynamoDB 路徑 ─────────────────────────────────────────────────────────
+    if _DYNAMO_CONV_TABLE:
+        try:
+            tbl = _dynamo_conv_table()
+            if tbl is not None:
+                if isinstance(conv_id, str) and conv_id.startswith("dyn:"):
+                    _, uid, cid = conv_id.split(":", 2)
+                else:
+                    cid = _uuid_mod.uuid4().hex
+                tbl.put_item(Item={
+                    "user_id":     str(user_id),
+                    "conv_id":     cid,
+                    "title":       title,
+                    "disp_json":   dj,
+                    "ollama_json": oj,
+                    "updated_at":  now,
+                })
+                return f"dyn:{user_id}:{cid}"
+        except Exception:
+            pass  # fallback SQLite
+
+    # ── SQLite 路徑 ────────────────────────────────────────────────────────────
     con = _db()
-    if conv_id:
+    if conv_id and not (isinstance(conv_id, str) and conv_id.startswith("dyn:")):
         con.execute(
             "UPDATE conversation SET title=?,disp_json=?,ollama_json=?,updated_at=? WHERE id=?",
             (title, dj, oj, now, conv_id),
         )
     else:
-        cur    = con.execute(
+        cur     = con.execute(
             "INSERT INTO conversation (user_id,title,disp_json,ollama_json,created_at,updated_at) "
             "VALUES (?,?,?,?,?,?)",
             (user_id, title, dj, oj, now, now),
