@@ -124,6 +124,18 @@ def _ensure_users_columns():
 _ensure_users_columns()
 
 
+def _uuid7() -> str:
+    """UUID v7：前段依毫秒時間戳遞增，後段隨機（官方規範）"""
+    import time as _time
+    ts_ms = int(_time.time() * 1000) & 0xFFFFFFFFFFFF
+    rand_bytes = os.urandom(10)
+    rand_int = int.from_bytes(rand_bytes, 'big')
+    rand_a = (rand_int >> 50) & 0xFFF
+    rand_b = rand_int & 0x3FFFFFFFFFFFFFFF
+    h = f"{ts_ms:012x}{rand_a:03x}{rand_b:016x}"
+    return f"{h[0:8]}-{h[8:12]}-7{h[13:16]}-{(0x80|(rand_b>>60)&0x3F):02x}{h[17:20]}-{h[20:32]}"
+
+
 def register_user(username, password, gender="", birthday="",
                   height_cm=0.0, weight_kg=0.0,
                   email="", dietary_pref="",
@@ -138,7 +150,7 @@ def register_user(username, password, gender="", birthday="",
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (username, password, gender, birthday, height_cm, weight_kg,
              email, dietary_pref, county_code, district_code,
-             address, contact_phone, str(_uuid_mod.uuid4()), datetime.now().isoformat()),
+             address, contact_phone, _uuid7(), datetime.now().isoformat()),
         )
         con.commit(); con.close(); return True
     except Exception:
@@ -265,12 +277,10 @@ def _ensure_users_schema():
     ]:
         if col not in cols:
             con.execute(f"ALTER TABLE users ADD COLUMN {col} {defn}")
-    # Backfill uuid for existing rows that have none
-    con.execute(
-        "UPDATE users SET uuid=lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||"
-        "lower(substr(hex(randomblob(2)),2))||'-'||lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(6)))"
-        " WHERE uuid=''"
-    )
+    # Backfill uuid v7 for existing rows that have none
+    rows_need_uuid = con.execute("SELECT id FROM users WHERE uuid=''").fetchall()
+    for row in rows_need_uuid:
+        con.execute("UPDATE users SET uuid=? WHERE id=?", (_uuid7(), row[0]))
     con.commit()
     con.close()
 

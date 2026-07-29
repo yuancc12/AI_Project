@@ -107,31 +107,31 @@ def _ensure_schema():
     # Create pms_form_feedback if not exists
     con.execute("""
         CREATE TABLE IF NOT EXISTS pms_form_feedback (
-            id                          INTEGER PRIMARY KEY AUTOINCREMENT,
-            feedback_no                 TEXT UNIQUE NOT NULL,
+            feedback_no                 TEXT PRIMARY KEY NOT NULL,
             service_id                  INTEGER NOT NULL DEFAULT 1,
             platform_code               TEXT NOT NULL DEFAULT '01',
             form_id                     INTEGER NOT NULL DEFAULT 1,
-            feedback_content            TEXT NOT NULL DEFAULT '',
+            feedback_content            TEXT NOT NULL DEFAULT '{}',
             form_type                   TEXT NOT NULL DEFAULT '1',
             is_read                     TEXT NOT NULL DEFAULT '0',
             status                      TEXT NOT NULL DEFAULT '01',
-            contact_name                TEXT DEFAULT '',
-            contact_name_hash           TEXT DEFAULT '',
-            contact_mobile              TEXT DEFAULT '',
-            contact_mobile_hash         TEXT DEFAULT '',
-            contact_landline            TEXT DEFAULT '',
-            contact_landline_hash       TEXT DEFAULT '',
-            contact_email               TEXT DEFAULT '',
-            contact_email_hash          TEXT DEFAULT '',
-            preferred_contact_time      TEXT DEFAULT '3',
-            contact_address_county      TEXT DEFAULT '',
-            contact_address_district    TEXT DEFAULT '',
-            contact_address_detail      TEXT DEFAULT '',
-            contact_address_detail_hash TEXT DEFAULT '',
-            description                 TEXT DEFAULT '',
+            contact_name                TEXT NOT NULL DEFAULT '',
+            contact_name_hash           TEXT NOT NULL DEFAULT '',
+            contact_mobile              TEXT NOT NULL DEFAULT '',
+            contact_mobile_hash         TEXT NOT NULL DEFAULT '',
+            contact_landline            TEXT NOT NULL DEFAULT '',
+            contact_landline_hash       TEXT NOT NULL DEFAULT '',
+            contact_email               TEXT NOT NULL DEFAULT '',
+            contact_email_hash          TEXT NOT NULL DEFAULT '',
+            preferred_contact_time      TEXT NOT NULL DEFAULT '3',
+            contact_address_county      TEXT NOT NULL DEFAULT '',
+            contact_address_district    TEXT NOT NULL DEFAULT '',
+            contact_address_detail      TEXT NOT NULL DEFAULT '',
+            contact_address_detail_hash TEXT NOT NULL DEFAULT '',
+            description                 TEXT NOT NULL DEFAULT '',
             inbr_account_id             TEXT NOT NULL DEFAULT '',
             cre_time                    TEXT NOT NULL DEFAULT '',
+            upd_id                      TEXT NOT NULL DEFAULT '',
             upd_time                    TEXT NOT NULL DEFAULT '',
             goal             TEXT NOT NULL DEFAULT '',
             budget           INTEGER NOT NULL DEFAULT 0,
@@ -224,12 +224,17 @@ def _ensure_schema():
             con.execute("ALTER TABLE users ADD COLUMN address TEXT NOT NULL DEFAULT ''")
         if 'uuid' not in cols_u:
             con.execute("ALTER TABLE users ADD COLUMN uuid TEXT NOT NULL DEFAULT ''")
-        # Backfill uuid for existing rows
-        con.execute(
-            "UPDATE users SET uuid=lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||"
-            "lower(substr(hex(randomblob(2)),2))||'-'||lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(6)))"
-            " WHERE uuid=''"
-        )
+        # Backfill uuid v7 for existing rows
+        import time as _time_mcp
+        for _row in con.execute("SELECT id FROM users WHERE uuid=''").fetchall():
+            _ts = int(_time_mcp.time() * 1000) & 0xFFFFFFFFFFFF
+            _rb = os.urandom(10)
+            _ri = int.from_bytes(_rb, 'big')
+            _ra = (_ri >> 50) & 0xFFF
+            _rb2 = _ri & 0x3FFFFFFFFFFFFFFF
+            _h = f"{_ts:012x}{_ra:03x}{_rb2:016x}"
+            _v7 = f"{_h[0:8]}-{_h[8:12]}-7{_h[13:16]}-{(0x80|(_rb2>>60)&0x3F):02x}{_h[17:20]}-{_h[20:32]}"
+            con.execute("UPDATE users SET uuid=? WHERE id=?", (_v7, _row[0]))
     except Exception:
         pass
     # Add address to cms_homepage_service_vendor if missing
@@ -681,7 +686,7 @@ def submit_inquiry(goal: str, contact_name: str, contact_phone: str,
                            "message": "尚未收集到聯絡電話，請先詢問用戶的電話再呼叫此工具。"},
                           ensure_ascii=False)
 
-    feedback_no = datetime.now().strftime("%y%m%d") + f"{uuid.uuid4().int % 100000000:08d}"
+    feedback_no = datetime.now().strftime("%Y%m%d%H%M%S") + f"{int(__import__('time').time()*1000)%100:02d}"
 
     # 建立 feedback_content（官方格式）
     _img_paths = []
@@ -780,7 +785,12 @@ def submit_inquiry(goal: str, contact_name: str, contact_phone: str,
         except Exception:
             pass
     if not _inbr_uuid:
-        _inbr_uuid = str(uuid.uuid4())
+        import time as _time_inbr
+        _ts = int(_time_inbr.time() * 1000) & 0xFFFFFFFFFFFF
+        _rb = os.urandom(10); _ri = int.from_bytes(_rb, 'big')
+        _ra = (_ri >> 50) & 0xFFF; _rb2 = _ri & 0x3FFFFFFFFFFFFFFF
+        _hh = f"{_ts:012x}{_ra:03x}{_rb2:016x}"
+        _inbr_uuid = f"{_hh[0:8]}-{_hh[8:12]}-7{_hh[13:16]}-{(0x80|(_rb2>>60)&0x3F):02x}{_hh[17:20]}-{_hh[20:32]}"
     # 若地址未含縣市，補入用戶縣市資訊讓路線規劃 geocoding 更準確
     if address and _user_county_code and not any(c in address for c in ["市", "縣"]):
         try:
@@ -955,7 +965,7 @@ def dispatch_delivery(inquiry_no: str, vendor_name: str,
     回傳:
         JSON 字串，含外送單號 delivery_no。
     """
-    order_no = datetime.now().strftime("%y%m%d") + f"{uuid.uuid4().int % 100000000:08d}"
+    order_no = "ORD" + datetime.now().strftime("%y%m%d") + f"{int(__import__('time').time()*1000)%1000000:06d}"
     now_iso  = datetime.now().isoformat()
 
     # 組合回覆訊息：加入配送業者與追蹤單號
@@ -1007,7 +1017,7 @@ def dispatch_delivery(inquiry_no: str, vendor_name: str,
     service_vendor_id = sv_row["id"] if sv_row else 0
 
     svc_row = con.execute(
-        "SELECT id FROM cms_homepage_service WHERE vendor_id=? AND is_enable=1 LIMIT 1",
+        "SELECT id FROM cms_homepage_service WHERE service_vendor_id=? AND is_enable=1 LIMIT 1",
         (service_vendor_id,),
     ).fetchone() if service_vendor_id else None
     service_id = svc_row["id"] if svc_row else 0
@@ -1074,7 +1084,11 @@ def dispatch_delivery(inquiry_no: str, vendor_name: str,
         except Exception:
             pass
     if not _inbr_uuid_d:
-        _inbr_uuid_d = str(uuid.uuid4())
+        import time as _td; _ts = int(_td.time()*1000)&0xFFFFFFFFFFFF
+        _rb = os.urandom(10); _ri = int.from_bytes(_rb,'big')
+        _ra = (_ri>>50)&0xFFF; _rb2 = _ri&0x3FFFFFFFFFFFFFFF
+        _hh = f"{_ts:012x}{_ra:03x}{_rb2:016x}"
+        _inbr_uuid_d = f"{_hh[0:8]}-{_hh[8:12]}-7{_hh[13:16]}-{(0x80|(_rb2>>60)&0x3F):02x}{_hh[17:20]}-{_hh[20:32]}"
 
     con.execute(
         "INSERT INTO mms_order_record "
@@ -2379,7 +2393,7 @@ def enroll_gym_course(contact_name: str, contact_phone: str,
                           ensure_ascii=False)
 
     # 建立一張諮詢單，goal 列出所有課程
-    feedback_no = datetime.now().strftime("%y%m%d") + f"{uuid.uuid4().int % 100000000:08d}"
+    feedback_no = datetime.now().strftime("%Y%m%d%H%M%S") + f"{int(__import__('time').time()*1000)%100:02d}"
     gym_name    = courses_found[0]["gym_name"]
     course_list = "、".join(c["course_name"] for c in courses_found)
     goal_text   = f"課程報名：{gym_name} {course_list}"
