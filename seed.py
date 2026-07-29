@@ -3,15 +3,61 @@
 seed.py — 建立健身採買助手的 SQLite 資料庫並塞入擬真假資料。
 執行：  python seed.py
 產出：  butler.db
+注意：DB Schema 完全符合 README.pdf 官方規範（2026 黑客松統一資訊命題）
 """
 import sqlite3
 import os
+import base64
+import hashlib
+import time
+from datetime import datetime
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 DB = os.path.join(os.path.dirname(__file__), "butler.db")
+
+# ── AES-256-GCM 加密工具（符合官方規範）────────────────────────────────────
+_ENCRYPT_KEY_HEX = os.getenv(
+    "ENCRYPT_KEY",
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+)
+if len(_ENCRYPT_KEY_HEX) == 64:
+    _KEY_BYTES = bytes.fromhex(_ENCRYPT_KEY_HEX)
+elif len(_ENCRYPT_KEY_HEX) == 44:
+    _KEY_BYTES = base64.b64decode(_ENCRYPT_KEY_HEX)
+else:
+    _KEY_BYTES = hashlib.sha256(_ENCRYPT_KEY_HEX.encode()).digest()
+
+def _encrypt(plaintext: str) -> str:
+    """AES-256-GCM 加密，回傳 base64（官方規範 bytea，SQLite 用 TEXT 儲存）"""
+    if not plaintext:
+        return ""
+    nonce = os.urandom(12)
+    ct = AESGCM(_KEY_BYTES).encrypt(nonce, plaintext.encode(), None)
+    return base64.b64encode(nonce + ct).decode()
+
+def _hash(plaintext: str) -> str:
+    """SHA-256 hash（官方規範：_hash 欄位用於查詢比對）"""
+    if not plaintext:
+        return ""
+    return hashlib.sha256(plaintext.encode()).hexdigest()
+
+def _uuid7() -> str:
+    """UUID v7：前段依毫秒時間戳遞增，後段隨機（官方規範）
+    格式：xxxxxxxx-xxxx-7xxx-[89ab]xxx-xxxxxxxxxxxx
+    """
+    ts_ms = int(time.time() * 1000) & 0xFFFFFFFFFFFF  # 48-bit timestamp
+    rand_bytes = os.urandom(10)
+    rand_int = int.from_bytes(rand_bytes, 'big')
+    # 組合：48bit ts | 4bit ver(7) | 12bit rand_a | 2bit var | 62bit rand_b
+    rand_a = (rand_int >> 50) & 0xFFF
+    rand_b = rand_int & 0x3FFFFFFFFFFFFFFF
+    h = f"{ts_ms:012x}{rand_a:03x}{rand_b:016x}"
+    return f"{h[0:8]}-{h[8:12]}-7{h[13:16]}-{(0x80|(rand_b>>60)&0x3F):02x}{h[17:20]}-{h[20:32]}"
 
 SCHEMA = """
 DROP TABLE IF EXISTS pms_form_feedback;
 DROP TABLE IF EXISTS mms_order_record;
+DROP TABLE IF EXISTS pms_topic_media;
 DROP TABLE IF EXISTS pms_topic_option;
 DROP TABLE IF EXISTS pms_form_topic;
 DROP TABLE IF EXISTS pms_form_group;
@@ -30,8 +76,8 @@ DROP TABLE IF EXISTS partner_vendor;
 CREATE TABLE fitness_product (
     id         INTEGER PRIMARY KEY,
     name       TEXT NOT NULL,
-    vendor     TEXT NOT NULL,   -- 萬家福 / 7-11 / 康是美 / 統一生機
-    category   TEXT NOT NULL,   -- 蛋白質 / 主食 / 蔬果 / 乳製品 / 保健品 / 即食
+    vendor     TEXT NOT NULL,
+    category   TEXT NOT NULL,
     protein_g  REAL NOT NULL DEFAULT 0,
     calories   INTEGER NOT NULL DEFAULT 0,
     price      INTEGER NOT NULL,
@@ -53,25 +99,46 @@ CREATE TABLE users (
     address       TEXT NOT NULL DEFAULT '',
     contact_phone TEXT NOT NULL DEFAULT '',
     uuid          TEXT NOT NULL DEFAULT '',
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    age           INTEGER NOT NULL DEFAULT 0,
+    fitness_goal  TEXT NOT NULL DEFAULT ''
 );
 
+-- ── 官方表 1：sys_county（縣市代碼檔）──────────────────────────────────────
 CREATE TABLE sys_county (
-    code TEXT PRIMARY KEY,
-    name TEXT NOT NULL
+    code       TEXT PRIMARY KEY,          -- varchar(2)
+    name       TEXT NOT NULL,             -- varchar(10)
+    sort       INTEGER NOT NULL DEFAULT 0,
+    is_deleted TEXT NOT NULL DEFAULT '0', -- 0正常 / 1刪除
+    upd_time   TEXT NOT NULL DEFAULT '',
+    cre_time   TEXT NOT NULL DEFAULT '',
+    upd_id     TEXT NOT NULL DEFAULT '',
+    cre_id     TEXT NOT NULL DEFAULT ''
 );
 
+-- ── 官方表 2：sys_district（行政區代碼檔）──────────────────────────────────
 CREATE TABLE sys_district (
-    code        TEXT NOT NULL,
-    county_code TEXT NOT NULL,
-    name        TEXT NOT NULL,
-    zip         TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (code, county_code)
+    code             TEXT NOT NULL,          -- varchar(3)
+    county_code      TEXT NOT NULL,          -- FK → sys_county.code
+    name             TEXT NOT NULL,          -- varchar(20)
+    name_with_county TEXT NOT NULL DEFAULT '',-- varchar(20)
+    zip              TEXT NOT NULL DEFAULT '',-- varchar(6)
+    sort             INTEGER NOT NULL DEFAULT 0,
+    is_deleted       TEXT NOT NULL DEFAULT '0',
+    upd_time         TEXT NOT NULL DEFAULT '',
+    cre_time         TEXT NOT NULL DEFAULT '',
+    upd_id           TEXT NOT NULL DEFAULT '',
+    cre_id           TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (code, county_code),
+    FOREIGN KEY (county_code) REFERENCES sys_county(code)
 );
 
+-- ── 官方表 3：cms_homepage_service_vendor（服務商主檔）─────────────────────
 CREATE TABLE cms_homepage_service_vendor (
-    id          INTEGER PRIMARY KEY,
-    name        TEXT NOT NULL,
+    id          INTEGER PRIMARY KEY,  -- int4
+    name        TEXT NOT NULL,        -- varchar
+    description TEXT NOT NULL DEFAULT '', -- varchar
+    -- 自訂擴充欄位
     category    TEXT NOT NULL DEFAULT '',
     rating      REAL NOT NULL DEFAULT 5.0,
     phone       TEXT NOT NULL DEFAULT '',
@@ -80,98 +147,168 @@ CREATE TABLE cms_homepage_service_vendor (
     is_enable   INTEGER NOT NULL DEFAULT 1
 );
 
+-- ── 官方表 4：cms_homepage_service（服務項目主檔）──────────────────────────
 CREATE TABLE cms_homepage_service (
-    id        INTEGER PRIMARY KEY,
-    vendor_id INTEGER NOT NULL,
-    name      TEXT NOT NULL,
-    type      TEXT NOT NULL DEFAULT '11',
-    intro     TEXT NOT NULL DEFAULT '',
-    is_enable INTEGER NOT NULL DEFAULT 1
+    id                INTEGER PRIMARY KEY,  -- int4
+    service_vendor_id INTEGER NOT NULL,     -- FK → cms_homepage_service_vendor.id
+    type              TEXT NOT NULL DEFAULT '11', -- varchar(2)，service type
+    name              TEXT NOT NULL,        -- varchar
+    img_url           TEXT NOT NULL DEFAULT '',   -- varchar
+    description       TEXT NOT NULL DEFAULT '',   -- text
+    -- 自訂擴充欄位
+    intro_content     TEXT NOT NULL DEFAULT '',
+    is_enable         INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY (service_vendor_id) REFERENCES cms_homepage_service_vendor(id)
 );
 
+-- ── 官方表 5：pms_form（表單主檔）──────────────────────────────────────────
 CREATE TABLE pms_form (
-    id            INTEGER PRIMARY KEY,
-    service_id    INTEGER NOT NULL,
-    name          TEXT NOT NULL,
-    intro_content TEXT NOT NULL DEFAULT '',
-    is_enable     INTEGER NOT NULL DEFAULT 1
+    id               INTEGER PRIMARY KEY AUTOINCREMENT, -- serial4
+    service_vendor_id INTEGER NOT NULL DEFAULT 0,       -- 服務提供商 ID
+    type             TEXT NOT NULL DEFAULT '1',         -- 1 C端(無評估)/2 C端(需評估)/3 B端/4轉訂單/5客服
+    sub_type         TEXT NOT NULL DEFAULT '1',         -- 1一般表單/2估價表單
+    name             TEXT NOT NULL,                     -- varchar(50)
+    intro_content    TEXT NOT NULL DEFAULT '',          -- html
+    notice_content   TEXT NOT NULL DEFAULT '',          -- html
+    terms_content    TEXT NOT NULL DEFAULT '',          -- html
+    review_status    TEXT NOT NULL DEFAULT '0',         -- 0未審核/1已審核
+    reviewed_id      TEXT NOT NULL DEFAULT '',          -- uuid
+    reviewed_time    TEXT NOT NULL DEFAULT '',
+    is_enable        TEXT NOT NULL DEFAULT '1',         -- 0禁用/1啟用
+    is_deleted       TEXT NOT NULL DEFAULT '0',         -- 0未刪除/1已刪除
+    feature          TEXT NOT NULL DEFAULT '{}',        -- jsonb
+    upd_time         TEXT NOT NULL DEFAULT '',
+    cre_time         TEXT NOT NULL DEFAULT '',
+    upd_id           TEXT NOT NULL DEFAULT '',
+    cre_id           TEXT NOT NULL DEFAULT ''
 );
 
+-- ── 官方表 6：pms_form_group（表單題組主檔）────────────────────────────────
 CREATE TABLE pms_form_group (
-    id      INTEGER PRIMARY KEY,
-    form_id INTEGER NOT NULL,
-    name    TEXT NOT NULL,
-    sort    INTEGER NOT NULL DEFAULT 0
+    id       INTEGER PRIMARY KEY AUTOINCREMENT, -- serial4
+    form_id  INTEGER NOT NULL,                  -- FK → pms_form.id
+    name     TEXT NOT NULL,                     -- varchar(50)
+    sort     INTEGER NOT NULL DEFAULT 0,
+    feature  TEXT NOT NULL DEFAULT '{}',        -- jsonb
+    upd_time TEXT NOT NULL DEFAULT '',
+    cre_time TEXT NOT NULL DEFAULT '',
+    upd_id   TEXT NOT NULL DEFAULT '',
+    cre_id   TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (form_id) REFERENCES pms_form(id)
 );
 
+-- ── 官方表 7：pms_form_topic（表單題目主檔）────────────────────────────────
 CREATE TABLE pms_form_topic (
-    id          INTEGER PRIMARY KEY,
-    form_id     INTEGER NOT NULL,
-    group_id    INTEGER NOT NULL,
-    type        INTEGER NOT NULL DEFAULT 1,
-    title       TEXT NOT NULL,
-    remark      TEXT NOT NULL DEFAULT '',
-    is_required INTEGER NOT NULL DEFAULT 0,
-    sort        INTEGER NOT NULL DEFAULT 0
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT, -- serial4
+    form_id                 INTEGER NOT NULL,   -- FK → pms_form.id
+    form_group_id           INTEGER NOT NULL,   -- FK → pms_form_group.id（官方欄位名）
+    type                    TEXT NOT NULL DEFAULT '1', -- 題目類別 1~10
+    title                   TEXT NOT NULL,      -- varchar(200)
+    remark                  TEXT NOT NULL DEFAULT '', -- varchar(500)
+    is_required             TEXT NOT NULL DEFAULT '0', -- 0非必填/1必填
+    sort                    INTEGER NOT NULL DEFAULT 0,
+    is_number_only          TEXT NOT NULL DEFAULT '0', -- 簡答題：0未指定/1數字
+    minimum_medias_upload   INTEGER NOT NULL DEFAULT 0, -- 照片題
+    maximum_medias_upload   INTEGER NOT NULL DEFAULT 0,
+    specified_medias_upload INTEGER NOT NULL DEFAULT 0,
+    start_date_offset_days  INTEGER NOT NULL DEFAULT 0, -- 日期題
+    end_date_offset_days    INTEGER NOT NULL DEFAULT 0,
+    feature                 TEXT NOT NULL DEFAULT '{}', -- jsonb
+    upd_time                TEXT NOT NULL DEFAULT '',
+    cre_time                TEXT NOT NULL DEFAULT '',
+    upd_id                  TEXT NOT NULL DEFAULT '',
+    cre_id                  TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (form_id)       REFERENCES pms_form(id),
+    FOREIGN KEY (form_group_id) REFERENCES pms_form_group(id)
 );
 
+-- ── 官方表 8：pms_topic_media（題目輔助圖片檔）─────────────────────────────
+CREATE TABLE pms_topic_media (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT, -- serial4
+    form_id  INTEGER NOT NULL,   -- FK → pms_form.id
+    topic_id INTEGER NOT NULL,   -- FK → pms_form_topic.id
+    img_url  TEXT NOT NULL DEFAULT '', -- text
+    sort     INTEGER NOT NULL DEFAULT 0,
+    upd_time TEXT NOT NULL DEFAULT '',
+    cre_time TEXT NOT NULL DEFAULT '',
+    upd_id   TEXT NOT NULL DEFAULT '',
+    cre_id   TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (form_id)  REFERENCES pms_form(id),
+    FOREIGN KEY (topic_id) REFERENCES pms_form_topic(id)
+);
+
+-- ── 官方表 9：pms_topic_option（題目選項主檔）──────────────────────────────
 CREATE TABLE pms_topic_option (
-    id          INTEGER PRIMARY KEY,
-    topic_id    INTEGER NOT NULL,
-    option_name TEXT NOT NULL,
-    unit_price  INTEGER NOT NULL DEFAULT 0,
-    unit        TEXT NOT NULL DEFAULT '',
-    sort        INTEGER NOT NULL DEFAULT 0
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT, -- serial4
+    form_id             INTEGER NOT NULL,   -- FK → pms_form.id
+    topic_id            INTEGER NOT NULL,   -- FK → pms_form_topic.id
+    option_name         TEXT NOT NULL,      -- varchar(200)
+    unit_price          INTEGER NOT NULL DEFAULT 0, -- int4
+    unit                TEXT NOT NULL DEFAULT '',   -- varchar(30)
+    is_quantity         TEXT NOT NULL DEFAULT '0',  -- 0不可選/1可選
+    min_quantity        INTEGER NOT NULL DEFAULT 0,
+    max_quantity        INTEGER NOT NULL DEFAULT 0,
+    is_quoted_separately TEXT NOT NULL DEFAULT '0', -- 0否/1是
+    remark              TEXT NOT NULL DEFAULT '',   -- varchar(500)
+    sort                INTEGER NOT NULL DEFAULT 0,
+    feature             TEXT NOT NULL DEFAULT '{}', -- jsonb
+    upd_time            TEXT NOT NULL DEFAULT '',
+    cre_time            TEXT NOT NULL DEFAULT '',
+    upd_id              TEXT NOT NULL DEFAULT '',
+    cre_id              TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (form_id)  REFERENCES pms_form(id),
+    FOREIGN KEY (topic_id) REFERENCES pms_form_topic(id)
 );
 
--- 健身採買諮詢單（submit_inquiry 寫入；dispatch_delivery 更新狀態）
+-- ── 官方表 10：pms_form_feedback（表單回饋檔）─────────────────────────────
 CREATE TABLE pms_form_feedback (
-    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
-    -- ── 官方欄位（與官方 schema 同名同規格）──
-    feedback_no                 TEXT UNIQUE NOT NULL,
-    service_id                  INTEGER NOT NULL DEFAULT 1,
-    platform_code               TEXT NOT NULL DEFAULT '01',
-    form_id                     INTEGER NOT NULL DEFAULT 1,
-    feedback_content            TEXT NOT NULL DEFAULT '',
-    form_type                   TEXT NOT NULL DEFAULT '1',
-    is_read                     TEXT NOT NULL DEFAULT '0',
-    status                      TEXT NOT NULL DEFAULT '01',
-    contact_name                TEXT DEFAULT '',
-    contact_name_hash           TEXT DEFAULT '',
-    contact_mobile              TEXT DEFAULT '',
-    contact_mobile_hash         TEXT DEFAULT '',
-    contact_landline            TEXT DEFAULT '',
-    contact_landline_hash       TEXT DEFAULT '',
-    contact_email               TEXT DEFAULT '',
-    contact_email_hash          TEXT DEFAULT '',
-    preferred_contact_time      TEXT DEFAULT '3',
-    contact_address_county      TEXT DEFAULT '',
-    contact_address_district    TEXT DEFAULT '',
-    contact_address_detail      TEXT DEFAULT '',
-    contact_address_detail_hash TEXT DEFAULT '',
-    description                 TEXT DEFAULT '',
-    inbr_account_id             TEXT NOT NULL DEFAULT '',
+    -- 官方 PK：feedback_no varchar(16)
+    feedback_no                 TEXT PRIMARY KEY NOT NULL,  -- 回饋單號（14碼純數字）
+    service_id                  INTEGER NOT NULL DEFAULT 1, -- → cms_homepage_service.id
+    platform_code               TEXT NOT NULL DEFAULT '01', -- 平台代號
+    form_id                     INTEGER NOT NULL DEFAULT 1, -- FK → pms_form.id
+    feedback_content            TEXT NOT NULL DEFAULT '{}', -- jsonb 表單回饋內容
+    form_type                   TEXT NOT NULL DEFAULT '1',  -- 表單類型
+    is_read                     TEXT NOT NULL DEFAULT '0',  -- 0未讀/1已讀
+    status                      TEXT NOT NULL DEFAULT '01', -- 01待處理/02配送中/03預留中/04待簽名/05待後台確認/80已完成/90已拒絕
+    -- 官方加密欄位（AES-256-GCM，SQLite 用 TEXT 儲存 base64）
+    contact_name                TEXT NOT NULL DEFAULT '',   -- bytea
+    contact_name_hash           TEXT NOT NULL DEFAULT '',   -- SHA-256
+    contact_mobile              TEXT NOT NULL DEFAULT '',   -- bytea
+    contact_mobile_hash         TEXT NOT NULL DEFAULT '',   -- SHA-256
+    contact_landline            TEXT NOT NULL DEFAULT '',   -- bytea（市話）
+    contact_landline_hash       TEXT NOT NULL DEFAULT '',
+    contact_email               TEXT NOT NULL DEFAULT '',   -- bytea
+    contact_email_hash          TEXT NOT NULL DEFAULT '',
+    preferred_contact_time      TEXT NOT NULL DEFAULT '3',  -- 1上午/2下午/3皆可
+    contact_address_county      TEXT NOT NULL DEFAULT '',   -- → sys_county.code
+    contact_address_district    TEXT NOT NULL DEFAULT '',   -- → sys_district.code
+    contact_address_detail      TEXT NOT NULL DEFAULT '',   -- bytea（加密）
+    contact_address_detail_hash TEXT NOT NULL DEFAULT '',
+    description                 TEXT NOT NULL DEFAULT '',   -- varchar(1000) 備註
+    inbr_account_id             TEXT NOT NULL DEFAULT '',   -- uuid，會員編號
     cre_time                    TEXT NOT NULL DEFAULT '',
+    upd_id                      TEXT NOT NULL DEFAULT '',   -- uuid
     upd_time                    TEXT NOT NULL DEFAULT '',
-    -- ── 自訂擴充欄位 ──
-    goal             TEXT NOT NULL DEFAULT '',
-    budget           INTEGER NOT NULL DEFAULT 0,
-    keyword          TEXT NOT NULL DEFAULT '',
-    county_code      TEXT NOT NULL DEFAULT '',
-    district_code    TEXT NOT NULL DEFAULT '',
-    contact_phone    TEXT NOT NULL DEFAULT '',
-    note             TEXT NOT NULL DEFAULT '',
-    address          TEXT NOT NULL DEFAULT '',
-    delivery_type    TEXT NOT NULL DEFAULT '外送',
-    pickup_store     TEXT NOT NULL DEFAULT '',
-    products_json    TEXT NOT NULL DEFAULT '',
-    user_id          INTEGER NOT NULL DEFAULT 0,
-    user_reply       TEXT NOT NULL DEFAULT '',
-    vendor_reply     TEXT NOT NULL DEFAULT '',
-    accepted_at      TEXT NOT NULL DEFAULT '',
-    images_json      TEXT NOT NULL DEFAULT '[]',
-    created_at       TEXT NOT NULL DEFAULT '',
-    contact_name_display TEXT NOT NULL DEFAULT ''
+    -- 自訂擴充欄位（業務邏輯用）
+    goal                TEXT NOT NULL DEFAULT '',
+    budget              INTEGER NOT NULL DEFAULT 0,
+    keyword             TEXT NOT NULL DEFAULT '',
+    county_code         TEXT NOT NULL DEFAULT '',
+    district_code       TEXT NOT NULL DEFAULT '',
+    contact_phone       TEXT NOT NULL DEFAULT '',
+    note                TEXT NOT NULL DEFAULT '',
+    address             TEXT NOT NULL DEFAULT '',
+    delivery_type       TEXT NOT NULL DEFAULT '外送',
+    pickup_store        TEXT NOT NULL DEFAULT '',
+    products_json       TEXT NOT NULL DEFAULT '[]',
+    user_id             INTEGER NOT NULL DEFAULT 0,
+    user_reply          TEXT NOT NULL DEFAULT '',
+    vendor_reply        TEXT NOT NULL DEFAULT '',
+    accepted_at         TEXT NOT NULL DEFAULT '',
+    images_json         TEXT NOT NULL DEFAULT '[]',
+    created_at          TEXT NOT NULL DEFAULT '',
+    contact_name_display TEXT NOT NULL DEFAULT ''  -- 解密後顯示用（非加密）
 );
 
 -- 合作廠商（餐廳、搬家、清潔、健身房等）
@@ -219,67 +356,73 @@ CREATE TABLE course_enrollment (
     enrolled_at   TEXT NOT NULL
 );
 
--- 外送訂單記錄（dispatch_delivery 寫入）
+-- ── 官方表 11：mms_order_record（訂單/訂位統一紀錄表）──────────────────────
 CREATE TABLE mms_order_record (
-    -- ── 官方欄位（與官方 schema 同名同規格）──
-    record_id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_no            TEXT UNIQUE NOT NULL,
-    service_vendor_id   INTEGER NOT NULL DEFAULT 0,
-    service_id          INTEGER NOT NULL DEFAULT 0,
-    platform_code       TEXT NOT NULL DEFAULT '01',
-    inbr_account_id     TEXT NOT NULL DEFAULT '',
-    member_name         TEXT DEFAULT '',
-    member_name_hash    TEXT DEFAULT '',
-    member_phone        TEXT DEFAULT '',
-    member_phone_hash   TEXT DEFAULT '',
-    member_email        TEXT DEFAULT '',
-    member_email_hash   TEXT DEFAULT '',
-    order_type          TEXT NOT NULL DEFAULT '05',
-    order_status        TEXT NOT NULL DEFAULT '02',
-    order_time          TEXT NOT NULL DEFAULT '',
-    deposit_time        TEXT DEFAULT '',
-    confirm_time        TEXT DEFAULT '',
-    service_time        TEXT DEFAULT '',
-    complete_time       TEXT DEFAULT '',
-    cancel_time         TEXT DEFAULT '',
-    deposit_amount      REAL NOT NULL DEFAULT 0,
-    original_amount     REAL NOT NULL DEFAULT 0,
-    discount_amount     REAL NOT NULL DEFAULT 0,
-    shipping_fee_amount REAL NOT NULL DEFAULT 0,
-    final_amount        REAL NOT NULL DEFAULT 0,
-    refund_amount       REAL NOT NULL DEFAULT 0,
-    order_points        REAL NOT NULL DEFAULT 0,
-    used_points         REAL NOT NULL DEFAULT 0,
-    refund_points       REAL NOT NULL DEFAULT 0,
-    earn_points         REAL NOT NULL DEFAULT 0,
-    point_status        TEXT NOT NULL DEFAULT '01',
-    point_grant_time    TEXT DEFAULT '',
-    vendor_data         TEXT NOT NULL DEFAULT '{}',
-    order_items         TEXT NOT NULL DEFAULT '',
-    remark              TEXT DEFAULT '',
-    cancel_reason       TEXT DEFAULT '',
-    refund_reason       TEXT DEFAULT '',
-    source_file         TEXT DEFAULT '',
-    import_batch        TEXT DEFAULT '',
-    quote_approved_by   TEXT DEFAULT '',
-    quote_approved_time TEXT DEFAULT '',
-    quote_no            TEXT DEFAULT '',
-    comment_status      TEXT NOT NULL DEFAULT '00',
-    is_deleted          INTEGER NOT NULL DEFAULT 0,
-    cre_id              TEXT NOT NULL DEFAULT '',
-    cre_time            TEXT NOT NULL DEFAULT '',
-    upd_id              TEXT NOT NULL DEFAULT '',
-    upd_time            TEXT NOT NULL DEFAULT '',
-    -- ── 自訂擴充欄位 ──
-    feedback_no       TEXT NOT NULL DEFAULT '',
-    vendor_name       TEXT NOT NULL DEFAULT '',
-    estimated_minutes INTEGER NOT NULL DEFAULT 60,
-    reply_message     TEXT NOT NULL DEFAULT '',
-    delivery_company  TEXT NOT NULL DEFAULT '',
-    tracking_no       TEXT NOT NULL DEFAULT '',
-    driver_name       TEXT NOT NULL DEFAULT '',
-    status            TEXT NOT NULL DEFAULT '01',
-    created_at        TEXT NOT NULL DEFAULT ''
+    record_id             INTEGER PRIMARY KEY AUTOINCREMENT, -- bigserial
+    order_no              TEXT NOT NULL,                -- 訂單編號（與 service_id 組成 UK）
+    service_vendor_id     INTEGER NOT NULL DEFAULT 0,   -- → cms_homepage_service_vendor.id
+    service_id            INTEGER NOT NULL DEFAULT 0,   -- → cms_homepage_service.id
+    platform_code         TEXT NOT NULL DEFAULT '01',   -- 01:OP APP
+    inbr_account_id       TEXT NOT NULL DEFAULT '',     -- uuid，會員編號
+    -- 官方加密欄位（AES-256-GCM，SQLite 用 TEXT 儲存 base64）
+    member_name           TEXT NOT NULL DEFAULT '',     -- bytea
+    member_name_hash      TEXT NOT NULL DEFAULT '',     -- SHA-256
+    member_phone          TEXT NOT NULL DEFAULT '',     -- bytea
+    member_phone_hash     TEXT NOT NULL DEFAULT '',
+    member_email          TEXT NOT NULL DEFAULT '',     -- bytea
+    member_email_hash     TEXT NOT NULL DEFAULT '',
+    -- 訂單資訊
+    order_type            TEXT NOT NULL DEFAULT '05',   -- 01服務/02訂位/03預約/04其他/05商品/06訂餐
+    order_status          TEXT NOT NULL DEFAULT '02',   -- 依 order_type 而異
+    order_time            TEXT NOT NULL DEFAULT '',
+    deposit_time          TEXT NOT NULL DEFAULT '',
+    confirm_time          TEXT NOT NULL DEFAULT '',
+    service_time          TEXT NOT NULL DEFAULT '',
+    complete_time         TEXT NOT NULL DEFAULT '',
+    cancel_time           TEXT NOT NULL DEFAULT '',
+    -- 金額
+    deposit_amount        REAL NOT NULL DEFAULT 0,
+    original_amount       REAL NOT NULL DEFAULT 0,
+    discount_amount       REAL NOT NULL DEFAULT 0,
+    shipping_fee_amount   REAL NOT NULL DEFAULT 0,
+    final_amount          REAL NOT NULL DEFAULT 0,
+    refund_amount         REAL NOT NULL DEFAULT 0,
+    -- 點數
+    order_points          REAL NOT NULL DEFAULT 0,
+    used_points           REAL NOT NULL DEFAULT 0,
+    refund_points         REAL NOT NULL DEFAULT 0,
+    earn_points           REAL NOT NULL DEFAULT 0,
+    point_status          TEXT NOT NULL DEFAULT '01',   -- 01待發放/02已發放/03不發放/04已取消
+    point_grant_time      TEXT NOT NULL DEFAULT '',
+    -- JSONB 欄位
+    vendor_data           TEXT NOT NULL DEFAULT '{}',   -- 服務商特定欄位
+    order_items           TEXT NOT NULL DEFAULT '[]',   -- 訂單品項明細
+    -- 其他
+    remark                TEXT NOT NULL DEFAULT '',
+    cancel_reason         TEXT NOT NULL DEFAULT '',
+    refund_reason         TEXT NOT NULL DEFAULT '',
+    source_file           TEXT NOT NULL DEFAULT '',     -- varchar(200)
+    import_batch          TEXT NOT NULL DEFAULT '',     -- varchar(50)
+    quote_approved_by     TEXT NOT NULL DEFAULT '',     -- uuid
+    quote_approved_time   TEXT NOT NULL DEFAULT '',
+    quote_no              TEXT NOT NULL DEFAULT '',     -- varchar(64)
+    comment_status        TEXT NOT NULL DEFAULT '00',   -- 00無須/01未評/02已評
+    is_deleted            INTEGER NOT NULL DEFAULT 0,
+    cre_id                TEXT NOT NULL DEFAULT '',     -- uuid
+    cre_time              TEXT NOT NULL DEFAULT '',
+    upd_id                TEXT NOT NULL DEFAULT '',     -- uuid
+    upd_time              TEXT NOT NULL DEFAULT '',
+    -- 自訂擴充欄位（配送業務邏輯用）
+    feedback_no           TEXT NOT NULL DEFAULT '',
+    vendor_name           TEXT NOT NULL DEFAULT '',
+    estimated_minutes     INTEGER NOT NULL DEFAULT 60,
+    reply_message         TEXT NOT NULL DEFAULT '',
+    delivery_company      TEXT NOT NULL DEFAULT '',
+    tracking_no           TEXT NOT NULL DEFAULT '',
+    driver_name           TEXT NOT NULL DEFAULT '',
+    status                TEXT NOT NULL DEFAULT '01',
+    created_at            TEXT NOT NULL DEFAULT '',
+    UNIQUE (order_no, service_id)
 );
 """
 
@@ -511,52 +654,57 @@ DISTRICTS = [
 ]
 
 SERVICE_VENDORS = [
-    # id, name, category, rating, phone, address, county_code, is_enable
-    (1, '7-ELEVEN',              '便利商店', 5.0, '0800-711711',    '台北市大安區忠孝東路四段181號',      '01', 1),
-    (2, '萬家福',                '超市',     4.8, '02-2723-6789',   '台北市信義區松高路1號B1',            '01', 1),
-    (3, '康是美',                '藥妝',     4.7, '02-2522-3333',   '台北市中山區南京東路二段168號',      '01', 1),
-    (4, '統一生機',              '有機食品', 4.6, '02-8712-4444',   '台北市松山區八德路三段32號',         '01', 1),
-    (5, '統一多拿滋 Mister Donut','甜食飲料', 4.7, '0800-211-211',  '台北市大安區忠孝東路四段181號1F',   '01', 1),
-    (6, 'Cold Stone Creamery',   '冰淇淋甜點',4.8, '02-8787-0101', '台北市信義區松壽路11號1F',           '01', 1),
-    (7, '7-ELEVEN 21plus',       '成人超商', 4.6, '0800-711-712',   '台北市信義區菸廠路88號',             '01', 1),
-    (8, '統一星巴克',            '咖啡飲料', 4.9, '0800-608-608',   '台北市信義區松壽路1號1F',            '01', 1),
-    (9, '聖德科斯 Sanitas',      '自然食品', 4.6, '02-2507-2888',   '台北市中山區南京東路二段30號',       '01', 1),
+    # id, name, description, category, rating, phone, address, county_code, is_enable
+    (1, '7-ELEVEN',               '統一超商 7-ELEVEN 健身商品線上採買服務',    '便利商店', 5.0, '0800-711711',    '台北市大安區忠孝東路四段181號',      '01', 1),
+    (2, '萬家福',                 '萬家福超市健身食材採買服務',                 '超市',     4.8, '02-2723-6789',   '台北市信義區松高路1號B1',            '01', 1),
+    (3, '康是美',                 '康是美藥妝保健品採買服務',                   '藥妝',     4.7, '02-2522-3333',   '台北市中山區南京東路二段168號',      '01', 1),
+    (4, '統一生機',               '統一生機有機健康食品採買服務',               '有機食品', 4.6, '02-8712-4444',   '台北市松山區八德路三段32號',         '01', 1),
+    (5, '統一多拿滋 Mister Donut','Mister Donut 甜甜圈、飲料外帶採買服務',     '甜食飲料', 4.7, '0800-211-211',   '台北市大安區忠孝東路四段181號1F',   '01', 1),
+    (6, 'Cold Stone Creamery',    'Cold Stone Creamery 手工冰淇淋甜點採買服務','冰淇淋甜點',4.8, '02-8787-0101', '台北市信義區松壽路11號1F',           '01', 1),
+    (7, '7-ELEVEN 21plus',        '統一超商 21plus 精選啤酒、葡萄酒、清酒採買','成人超商', 4.6, '0800-711-712',   '台北市信義區菸廠路88號',             '01', 1),
+    (8, '統一星巴克',             '統一星巴克精品咖啡、茶飲採買服務',           '咖啡飲料', 4.9, '0800-608-608',   '台北市信義區松壽路1號1F',            '01', 1),
+    (9, '聖德科斯 Sanitas',       '聖德科斯 Sanitas 天然有機食品、保健品採買',  '自然食品', 4.6, '02-2507-2888',   '台北市中山區南京東路二段30號',       '01', 1),
 ]
 
 SERVICES = [
-    (1, 1, '7-ELEVEN 商城購物',       '11', '統一超商 7-ELEVEN 健身商品線上採買服務',           1),
-    (2, 2, '萬家福 商城購物',         '11', '萬家福超市健身食材採買服務',                       1),
-    (3, 3, '康是美 商城購物',         '11', '康是美藥妝保健品採買服務',                         1),
-    (4, 4, '統一生機 商城購物',       '11', '統一生機有機健康食品採買服務',                     1),
-    (5, 5, '統一多拿滋 甜食點心',     '11', 'Mister Donut 甜甜圈、飲料外帶採買服務',           1),
-    (6, 6, 'Cold Stone 冰淇淋',       '11', 'Cold Stone Creamery 手工冰淇淋甜點採買服務',       1),
-    (7, 7, '21plus 成人精選商品',     '11', '統一超商 21plus 精選啤酒、葡萄酒、清酒採買服務', 1),
-    (8, 8, '統一星巴克 咖啡飲料',     '11', '統一星巴克精品咖啡、茶飲採買服務',                 1),
-    (9, 9, '聖德科斯 天然自然食品',   '11', '聖德科斯 Sanitas 天然有機食品、保健品採買服務',   1),
+    # id, service_vendor_id, type, name, img_url, description, intro_content, is_enable
+    (1, 1, '11', '7-ELEVEN 商城購物',       '', '統一超商 7-ELEVEN 健身商品線上採買服務',           '填寫您的採買需求，後台人員將主動聯繫安排配送。', 1),
+    (2, 2, '11', '萬家福 商城購物',         '', '萬家福超市健身食材採買服務',                       '填寫您的採買需求，後台人員將主動聯繫安排配送。', 1),
+    (3, 3, '11', '康是美 商城購物',         '', '康是美藥妝保健品採買服務',                         '填寫您的採買需求，後台人員將主動聯繫安排配送。', 1),
+    (4, 4, '11', '統一生機 商城購物',       '', '統一生機有機健康食品採買服務',                     '填寫您的採買需求，後台人員將主動聯繫安排配送。', 1),
+    (5, 5, '11', '統一多拿滋 甜食點心',     '', 'Mister Donut 甜甜圈、飲料外帶採買服務',           '填寫您的採買需求，後台人員將主動聯繫安排配送。', 1),
+    (6, 6, '11', 'Cold Stone 冰淇淋',       '', 'Cold Stone Creamery 手工冰淇淋甜點採買服務',       '填寫您的採買需求，後台人員將主動聯繫安排配送。', 1),
+    (7, 7, '11', '21plus 成人精選商品',     '', '統一超商 21plus 精選啤酒、葡萄酒、清酒採買服務',   '填寫您的採買需求，後台人員將主動聯繫安排配送。', 1),
+    (8, 8, '11', '統一星巴克 咖啡飲料',     '', '統一星巴克精品咖啡、茶飲採買服務',                 '填寫您的採買需求，後台人員將主動聯繫安排配送。', 1),
+    (9, 9, '11', '聖德科斯 天然自然食品',   '', '聖德科斯 Sanitas 天然有機食品、保健品採買服務',   '填寫您的採買需求，後台人員將主動聯繫安排配送。', 1),
 ]
 
 FORMS = [
-    (1, 1, '健身採買諮詢單', '填寫您的健身目標與採買需求，後台人員將主動聯繫安排採購配送。', 1),
+    # id, service_vendor_id, type, sub_type, name, intro_content, is_enable
+    (1, 1, '1', '1', '健身採買諮詢單', '填寫您的健身目標與採買需求，後台人員將主動聯繫安排採購配送。', '1'),
 ]
 
 FORM_GROUPS = [
+    # id, form_id, name, sort
     (1, 1, '基本資訊', 1),
     (2, 1, '採買需求', 2),
 ]
 
 FORM_TOPICS = [
-    (1, 1, 1, 3,  '健身目標',       '請選擇您的健身目標',             1, 1),
-    (2, 1, 1, 1,  '採買預算（元）', '輸入本次採買的預算金額',         1, 2),
-    (3, 1, 1, 10, '聯絡資料',       '方便後台人員與您聯繫',           1, 3),
-    (4, 1, 2, 1,  '搜尋關鍵字',     '指定想找的商品名稱（選填）',     0, 1),
-    (5, 1, 2, 2,  '特殊需求備註',   '例如：素食、過敏食材、指定品牌', 0, 2),
+    # id, form_id, form_group_id, type, title, remark, is_required, sort
+    (1, 1, 1, '3', '健身目標',       '請選擇您的健身目標',             '1', 1),
+    (2, 1, 1, '1', '採買預算（元）', '輸入本次採買的預算金額',         '1', 2),
+    (3, 1, 1, '8', '聯絡資料',       '方便後台人員與您聯繫',           '1', 3),
+    (4, 1, 2, '1', '搜尋關鍵字',     '指定想找的商品名稱（選填）',     '0', 1),
+    (5, 1, 2, '2', '特殊需求備註',   '例如：素食、過敏食材、指定品牌', '0', 2),
 ]
 
 TOPIC_OPTIONS = [
-    (1, 1, '增肌',     0, '', 1),
-    (2, 1, '減脂',     0, '', 2),
-    (3, 1, '維持體重', 0, '', 3),
-    (4, 1, '搜尋商品', 0, '', 4),
+    # id, form_id, topic_id, option_name, unit_price, unit, is_quantity, remark, sort
+    (1, 1, 1, '增肌',     0, '', '0', '', 1),
+    (2, 1, 1, '減脂',     0, '', '0', '', 2),
+    (3, 1, 1, '維持體重', 0, '', '0', '', 3),
+    (4, 1, 1, '搜尋商品', 0, '', '0', '', 4),
 ]
 
 # id, name, category, phone, address, county_code, rating, description, is_enable
@@ -681,45 +829,76 @@ def main():
     cur = con.cursor()
     cur.executescript(SCHEMA)
 
+    now = datetime.now().isoformat()
+    sys_uuid = _uuid7()  # 系統操作者 UUID（seed 用）
+
     cur.executemany(
         "INSERT INTO fitness_product "
         "(id,name,vendor,category,protein_g,calories,price,stock) VALUES (?,?,?,?,?,?,?,?)",
         PRODUCTS,
     )
+    # sys_county：補上官方欄位
     cur.executemany(
-        "INSERT INTO sys_county (code,name) VALUES (?,?)",
-        COUNTIES,
+        "INSERT INTO sys_county (code,name,sort,is_deleted,upd_time,cre_time,upd_id,cre_id) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        [(c[0], c[1], i+1, '0', now, now, sys_uuid, sys_uuid)
+         for i, c in enumerate(COUNTIES)],
     )
+    # sys_district：補上官方欄位（name_with_county = name + 縣市名）
+    county_name_map = {c[0]: c[1] for c in COUNTIES}
     cur.executemany(
-        "INSERT INTO sys_district (code,county_code,name,zip) VALUES (?,?,?,?)",
-        DISTRICTS,
+        "INSERT INTO sys_district "
+        "(code,county_code,name,name_with_county,zip,sort,is_deleted,upd_time,cre_time,upd_id,cre_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [(d[0], d[1], d[2],
+          d[2] + county_name_map.get(d[1], ''),
+          d[3], i+1, '0', now, now, sys_uuid, sys_uuid)
+         for i, d in enumerate(DISTRICTS)],
     )
+    # cms_homepage_service_vendor：對齊官方欄位
     cur.executemany(
         "INSERT INTO cms_homepage_service_vendor "
-        "(id,name,category,rating,phone,address,county_code,is_enable) VALUES (?,?,?,?,?,?,?,?)",
+        "(id,name,description,category,rating,phone,address,county_code,is_enable) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
         SERVICE_VENDORS,
     )
+    # cms_homepage_service：service_vendor_id（官方欄位名）
     cur.executemany(
         "INSERT INTO cms_homepage_service "
-        "(id,vendor_id,name,type,intro,is_enable) VALUES (?,?,?,?,?,?)",
+        "(id,service_vendor_id,type,name,img_url,description,intro_content,is_enable) "
+        "VALUES (?,?,?,?,?,?,?,?)",
         SERVICES,
     )
+    # pms_form：補上官方欄位
     cur.executemany(
-        "INSERT INTO pms_form (id,service_id,name,intro_content,is_enable) VALUES (?,?,?,?,?)",
-        FORMS,
+        "INSERT INTO pms_form "
+        "(id,service_vendor_id,type,sub_type,name,intro_content,is_enable,cre_time,upd_time,cre_id,upd_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [(f[0], f[1], f[2], f[3], f[4], f[5], f[6], now, now, sys_uuid, sys_uuid)
+         for f in FORMS],
     )
+    # pms_form_group
     cur.executemany(
-        "INSERT INTO pms_form_group (id,form_id,name,sort) VALUES (?,?,?,?)",
-        FORM_GROUPS,
+        "INSERT INTO pms_form_group (id,form_id,name,sort,cre_time,upd_time,cre_id,upd_id) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        [(g[0], g[1], g[2], g[3], now, now, sys_uuid, sys_uuid)
+         for g in FORM_GROUPS],
     )
+    # pms_form_topic：form_group_id（官方欄位名）
     cur.executemany(
         "INSERT INTO pms_form_topic "
-        "(id,form_id,group_id,type,title,remark,is_required,sort) VALUES (?,?,?,?,?,?,?,?)",
-        FORM_TOPICS,
+        "(id,form_id,form_group_id,type,title,remark,is_required,sort,cre_time,upd_time,cre_id,upd_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        [(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], now, now, sys_uuid, sys_uuid)
+         for t in FORM_TOPICS],
     )
+    # pms_topic_option：補上官方欄位（form_id, is_quantity, remark, feature）
     cur.executemany(
-        "INSERT INTO pms_topic_option (id,topic_id,option_name,unit_price,unit,sort) VALUES (?,?,?,?,?,?)",
-        TOPIC_OPTIONS,
+        "INSERT INTO pms_topic_option "
+        "(id,form_id,topic_id,option_name,unit_price,unit,is_quantity,remark,sort,cre_time,upd_time,cre_id,upd_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [(o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7], o[8], now, now, sys_uuid, sys_uuid)
+         for o in TOPIC_OPTIONS],
     )
     cur.executemany(
         "INSERT INTO partner_vendor "
@@ -744,7 +923,8 @@ def main():
     tables = [
         "fitness_product", "users", "sys_county", "sys_district",
         "cms_homepage_service_vendor", "cms_homepage_service",
-        "pms_form", "pms_form_group", "pms_form_topic", "pms_topic_option",
+        "pms_form", "pms_form_group", "pms_form_topic",
+        "pms_topic_media", "pms_topic_option",
         "pms_form_feedback", "mms_order_record",
         "partner_vendor", "gym_course", "course_enrollment",
     ]
