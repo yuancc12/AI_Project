@@ -54,7 +54,9 @@ def _dynamo_conv_table():
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-DB_PATH = os.path.join(_HERE, "butler.db")
+# EC2 上可設 DB_PATH 環境變數指向 EBS（/data/butler.db）
+# 本機開發預設放在專案目錄下
+DB_PATH = os.getenv("DB_PATH", os.path.join(_HERE, "butler.db"))
 # EC2 上 DB 可掛 EBS 持久化；首次啟動自動建立，不會 DROP 現有資料
 if not os.path.exists(DB_PATH):
     import seed as _seed

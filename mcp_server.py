@@ -78,7 +78,7 @@ if os.path.exists(_env_file):
                 _k, _v = _line.split("=", 1)
                 os.environ.setdefault(_k.strip(), _v.strip())
 
-DB = os.path.join(os.path.dirname(__file__), "butler.db")
+DB = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "butler.db"))
 mcp = MCPServer("life-butler")
 
 # ── AWS Secrets Manager：啟動時自動載入金鑰（EC2 + IAM Role 免 Key 即可用）──────
