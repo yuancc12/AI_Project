@@ -5,3 +5,14 @@ butler.db
 *.db-wal
 .env
 .streamlit/secrets.toml
+
+# AWS 部署 — 含真實金鑰的設定檔不進 git
+deploy/.env.aws
+*.pem
+*.key
+
+# 暫存驗證腳本
+check_db.py
+check_env.py
+check_schema.py
+

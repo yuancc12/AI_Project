@@ -1,0 +1,41 @@
+[Unit]
+Description=AI 生活管家 — 廠商後台 (vendor_dashboard.py :8502)
+After=network.target butler-app.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/butler
+
+# 載入環境變數（.env 檔案）
+EnvironmentFile=/opt/butler/.env
+
+# 額外環境變數
+Environment="PATH=/opt/butler/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+
+# 啟動指令
+ExecStart=/opt/butler/.venv/bin/streamlit run vendor_dashboard.py \
+    --server.port=8502 \
+    --server.address=0.0.0.0 \
+    --server.headless=true \
+    --server.enableCORS=false \
+    --server.enableXsrfProtection=false \
+    --browser.gatherUsageStats=false
+
+# 重啟策略
+Restart=always
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+
+# 輸出 log
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=butler-vendor
+
+[Install]
+WantedBy=multi-user.target

@@ -13,7 +13,7 @@ import time
 from datetime import datetime
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-DB = os.path.join(os.path.dirname(__file__), "butler.db")
+DB = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "butler.db"))
 
 # ── AES-256-GCM 加密工具（符合官方規範）────────────────────────────────────
 _ENCRYPT_KEY_HEX = os.getenv(

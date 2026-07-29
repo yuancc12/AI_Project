@@ -1,0 +1,41 @@
+[Unit]
+Description=AI 生活管家 — 消費者前端 (app.py :8501)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/butler
+
+# 載入環境變數（.env 檔案）
+EnvironmentFile=/opt/butler/.env
+
+# 額外環境變數
+Environment="PATH=/opt/butler/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+
+# 啟動指令
+ExecStart=/opt/butler/.venv/bin/streamlit run app.py \
+    --server.port=8501 \
+    --server.address=0.0.0.0 \
+    --server.headless=true \
+    --server.enableCORS=false \
+    --server.enableXsrfProtection=false \
+    --browser.gatherUsageStats=false
+
+# 重啟策略
+Restart=always
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+
+# 輸出 log
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=butler-app
+
+[Install]
+WantedBy=multi-user.target
