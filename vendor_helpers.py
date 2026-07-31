@@ -7,6 +7,7 @@ vendor_helpers.py — 健康採買後台輔助模組
 import sqlite3
 import json
 import os
+import time
 import asyncio
 import concurrent.futures
 from datetime import datetime
@@ -205,8 +206,21 @@ MCP_TOOLS = [
 ]
 
 
-# ── Ollama 本地 AI + 真實 MCP 呼叫（後台版）────────────────────────────────
+# ── Bedrock（後台主要 AI）+ Ollama fallback ──────────────────────────────
 
+# Bedrock 設定
+BEDROCK_MODEL  = os.getenv("BEDROCK_ADMIN_MODEL", "us.anthropic.claude-haiku-4-5")
+_AWS_REGION_VH = os.getenv("AWS_REGION", "us-east-1")
+
+try:
+    import boto3 as _boto3_vh
+    _bedrock_client = _boto3_vh.client("bedrock-runtime", region_name=_AWS_REGION_VH)
+    _HAS_BEDROCK = True
+except Exception:
+    _bedrock_client = None
+    _HAS_BEDROCK = False
+
+# Ollama fallback
 _ollama = OpenAI(
     base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/v1",
     api_key="ollama",
@@ -329,6 +343,110 @@ def dispatch_via_mcp(inquiry_no, vendor_name, estimated_minutes=60,
         return {"success": False, "message": f"MCP 呼叫失敗：{exc}"}
 
 
+async def _admin_bedrock_loop(msgs: list) -> tuple:
+    """後台 Bedrock (Claude Haiku) chat loop，透過 mcp.Client 呼叫 MCP 工具。
+    Bedrock converse API 使用 tool_use / tool_result 格式。
+    """
+    import uuid as _uuid
+
+    tool_log = []
+
+    # 轉換訊息格式：OpenAI-style → Bedrock converse 格式
+    system_text = ""
+    bedrock_msgs = []
+    for m in msgs:
+        if m["role"] == "system":
+            system_text = m["content"]
+        elif m["role"] == "user":
+            bedrock_msgs.append({"role": "user", "content": [{"text": m["content"]}]})
+        elif m["role"] == "assistant":
+            bedrock_msgs.append({"role": "assistant", "content": [{"text": m["content"]}]})
+
+    # Bedrock tool schema（converse API 格式）
+    bedrock_tools = {
+        "tools": [
+            {
+                "toolSpec": {
+                    "name": t["function"]["name"],
+                    "description": t["function"]["description"],
+                    "inputSchema": {"json": t["function"]["parameters"]},
+                }
+            }
+            for t in ADMIN_TOOLS
+        ]
+    }
+
+    async with Client(_mcp) as mcp_client:
+        for _ in range(6):
+            kwargs = dict(
+                modelId=BEDROCK_MODEL,
+                messages=bedrock_msgs,
+                inferenceConfig={"maxTokens": 1024, "temperature": 0.0},
+                toolConfig=bedrock_tools,
+            )
+            if system_text:
+                kwargs["system"] = [{"text": system_text}]
+
+            time.sleep(1)  # Bedrock ≤1 RPS 規範
+            resp = _bedrock_client.converse(**kwargs)
+            output_msg = resp["output"]["message"]
+            stop_reason = resp.get("stopReason", "")
+
+            # 收集文字與工具呼叫
+            reply_text = ""
+            tool_uses = []
+            for block in output_msg.get("content", []):
+                if "text" in block:
+                    reply_text += block["text"]
+                elif "toolUse" in block:
+                    tool_uses.append(block["toolUse"])
+
+            # 把 assistant 回應加入對話
+            bedrock_msgs.append({"role": "assistant", "content": output_msg["content"]})
+
+            if not tool_uses or stop_reason == "end_turn":
+                return reply_text, tool_log
+
+            # 執行工具並收集 tool_result
+            tool_results = []
+            for tu in tool_uses:
+                tool_name = tu["name"]
+                tool_args = tu["input"]
+                ts = datetime.now().strftime("%H:%M:%S")
+
+                print(f"\n🔌 [後台 Bedrock MCP] call_tool('{tool_name}', {tool_args})")
+
+                mcp_result = await mcp_client.call_tool(tool_name, tool_args)
+                result_text = (
+                    mcp_result.content[0].text if mcp_result.content else "{}"
+                )
+                try:
+                    result_dict = json.loads(result_text)
+                except Exception:
+                    result_dict = {"raw": result_text}
+
+                print(f"✅ [後台 Bedrock MCP] '{tool_name}' 回傳: {result_text[:120]}")
+
+                tool_log.append({
+                    "tool":   tool_name,
+                    "params": tool_args,
+                    "result": result_dict,
+                    "ts":     ts,
+                    "via":    "Bedrock+MCP",
+                })
+
+                tool_results.append({
+                    "toolResult": {
+                        "toolUseId": tu["toolUseId"],
+                        "content": [{"text": result_text}],
+                    }
+                })
+
+            bedrock_msgs.append({"role": "user", "content": tool_results})
+
+    return "（對話輪數過多，已停止。）", tool_log
+
+
 async def _admin_ollama_loop(msgs: list) -> tuple:
     """後台 Ollama chat loop，透過 mcp.Client 呼叫 dispatch_delivery。
     支援 qwen2.5 fallback：當模型把工具呼叫輸出成純文字時，自動萃取並執行。
@@ -420,19 +538,48 @@ async def _admin_ollama_loop(msgs: list) -> tuple:
 
 
 def admin_ollama_chat(prompt: str, history: list) -> tuple:
-    """後台 Ollama + 真實 MCP 對話。回傳 (reply, tool_log, updated_history)。"""
+    """後台 AI 對話：優先使用 Bedrock（Claude Haiku），無 Bedrock 時 fallback 到 Ollama。
+    回傳 (reply, tool_log, updated_history)。
+    """
     msgs = [{"role": "system", "content": ADMIN_SYSTEM}] + history + [
         {"role": "user", "content": prompt}
     ]
-    try:
-        text, tool_log = _run_async(_admin_ollama_loop(msgs))
-    except Exception as exc:
-        text = (
-            f"❌ Ollama 連線失敗：{exc}\n\n"
-            f"請確認 Ollama 已啟動：`ollama serve`\n"
-            f"並已下載模型：`ollama pull {OLLAMA_MODEL}`"
-        )
-        tool_log = []
+
+    # ── 優先：Bedrock（Claude Haiku）────────────────────────────────────────
+    if _HAS_BEDROCK and _bedrock_client is not None:
+        try:
+            text, tool_log = _run_async(_admin_bedrock_loop(msgs))
+            backend_label = f"Bedrock ({BEDROCK_MODEL})"
+        except Exception as exc:
+            print(f"⚠️  Bedrock 失敗，切換 Ollama fallback：{exc}")
+            # 降級到 Ollama
+            try:
+                text, tool_log = _run_async(_admin_ollama_loop(msgs))
+                backend_label = f"Ollama ({OLLAMA_MODEL})"
+            except Exception as exc2:
+                text = (
+                    f"❌ Bedrock 及 Ollama 均無法連線。\n\n"
+                    f"Bedrock 錯誤：{exc}\n"
+                    f"Ollama 錯誤：{exc2}\n\n"
+                    f"請確認：\n"
+                    f"1. EC2 IAM Role 已授予 bedrock:InvokeModel 權限\n"
+                    f"2. 或本地 Ollama 已啟動：`ollama serve`"
+                )
+                tool_log = []
+                backend_label = "（無可用後端）"
+    else:
+        # ── Fallback：Ollama（本地開發 / 未設定 AWS 時）────────────────────
+        try:
+            text, tool_log = _run_async(_admin_ollama_loop(msgs))
+            backend_label = f"Ollama ({OLLAMA_MODEL})"
+        except Exception as exc:
+            text = (
+                f"❌ Ollama 連線失敗：{exc}\n\n"
+                f"請確認 Ollama 已啟動：`ollama serve`\n"
+                f"並已下載模型：`ollama pull {OLLAMA_MODEL}`"
+            )
+            tool_log = []
+            backend_label = "（無可用後端）"
 
     updated = history + [
         {"role": "user", "content": prompt},
