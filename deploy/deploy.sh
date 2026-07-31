@@ -12,13 +12,13 @@
 set -euo pipefail
 
 # ── CONFIG ───────────────────────────────────────────────────────────────────
-REPO_URL="${REPO_URL:-https://github.com/your-org/ai-life-butler.git}"
+REPO_URL="${REPO_URL:-https://github.com/yuancc12/AI_Project.git}"
 BRANCH="${BRANCH:-feature/schema-align-pdf}"
 APP_DIR="${APP_DIR:-/opt/butler}"
 DATA_DIR="${DATA_DIR:-/data}"          # EBS 掛載點（butler.db 存這裡）
 APP_USER="${APP_USER:-ec2-user}"       # Amazon Linux: ec2-user / Ubuntu: ubuntu
 PYTHON_VER="3.11"
-AWS_REGION="${AWS_REGION:-ap-northeast-1}"
+AWS_REGION="${AWS_REGION:-us-east-1}"
 
 # ── 顏色輸出 ─────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
