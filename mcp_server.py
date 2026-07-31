@@ -25,11 +25,11 @@ from mcp.server import MCPServer
 # ── AWS boto3（選用；未安裝或未設定憑證時靜默退化）──────────────────────────────
 try:
     import boto3 as _boto3
-    _AWS_REGION = os.getenv("AWS_REGION", "ap-northeast-1")
+    _AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
     _HAS_BOTO3  = True
 except ImportError:
     _boto3      = None
-    _AWS_REGION = "ap-northeast-1"
+    _AWS_REGION = "us-east-1"
     _HAS_BOTO3  = False
 
 

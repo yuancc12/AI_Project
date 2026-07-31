@@ -18,11 +18,11 @@ from mcp import Client
 # ── AWS boto3（選用；EC2 掛 IAM Role 後免 Access Key）────────────────────────
 try:
     import boto3 as _boto3
-    _AWS_REGION = os.getenv("AWS_REGION", "ap-northeast-1")
+    _AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
     _HAS_BOTO3  = True
 except ImportError:
     _boto3      = None
-    _AWS_REGION = "ap-northeast-1"
+    _AWS_REGION = "us-east-1"
     _HAS_BOTO3  = False
 
 # ── AWS Secrets Manager：載入 API 金鑰（取代 .env 明文）─────────────────────

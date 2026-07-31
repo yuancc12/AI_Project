@@ -1151,6 +1151,12 @@ with (tab2 if tab2 is not None else _null):
 
 with (tab3 if tab3 is not None else _null):
     st.markdown("#### 🤖 AI 派送助手 + mcp.Client")
+    # 顯示目前後端
+    from vendor_helpers import _HAS_BEDROCK, BEDROCK_MODEL, OLLAMA_MODEL as _OLLAMA_MODEL_VH
+    if _HAS_BEDROCK:
+        st.info(f"🟢 後端：**Amazon Bedrock** `{BEDROCK_MODEL}`　｜　Ollama (`{_OLLAMA_MODEL_VH}`) 備援")
+    else:
+        st.warning(f"🟡 後端：**Ollama** `{_OLLAMA_MODEL_VH}`（Bedrock 未設定，請確認 IAM Role 或 boto3 安裝）")
     st.caption(
         "透過 AI 對話自動呼叫 `dispatch_delivery` MCP 工具完成派送。\n\n"
         "範例：「請幫諮詢單 2607080000XXXX 安排萬家福信義店配送，40分鐘」"
