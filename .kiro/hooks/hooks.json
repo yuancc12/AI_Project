@@ -1,0 +1,36 @@
+{
+  "hooks": [
+    {
+      "name": "Python 語法檢查",
+      "description": "儲存 Python 檔案時自動執行 pyflakes 語法檢查，避免明顯錯誤上傳",
+      "event": "file:save",
+      "filter": "**/*.py",
+      "command": "python -m pyflakes ${file}",
+      "blocking": false
+    },
+    {
+      "name": "seed.py 變更提示",
+      "description": "當 seed.py 被修改時，提醒開發者需重新執行 seed.py 並重啟 app",
+      "event": "file:save",
+      "filter": "seed.py",
+      "message": "⚠️ seed.py 已修改。請執行 `python seed.py` 重建資料庫，並重啟 app.py / vendor_dashboard.py 以重建 conversation 和 vendor_users 表。",
+      "blocking": false
+    },
+    {
+      "name": "敏感金鑰保護",
+      "description": "偵測 .env 是否被加入 git staging，若有則發出警告",
+      "event": "git:pre-commit",
+      "filter": ".env",
+      "message": "🚨 .env 即將被提交！請確認 .gitignore 已排除 .env，避免 API 金鑰外洩。",
+      "blocking": true
+    },
+    {
+      "name": "butler.db 保護",
+      "description": "偵測 butler.db 是否被加入 git staging，避免含假資料的 DB 被提交",
+      "event": "git:pre-commit",
+      "filter": "*.db",
+      "message": "⚠️ SQLite 資料庫檔案即將被提交。請確認 .gitignore 已排除 *.db。",
+      "blocking": true
+    }
+  ]
+}

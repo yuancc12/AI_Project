@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """統一生活管家 — 登入 + Claude API + 真實 MCP 工具呼叫"""
 import os
+import time
 import json
 import asyncio
 import streamlit as st
@@ -51,12 +52,12 @@ except ImportError:
 try:
     import boto3 as _boto3_app
     _S3_BUCKET  = os.getenv("S3_BUCKET", "")
-    _AWS_REGION = os.getenv("AWS_REGION", "ap-northeast-1")
+    _AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
     _HAS_S3 = bool(_S3_BUCKET)
 except ImportError:
     _boto3_app  = None
     _S3_BUCKET  = ""
-    _AWS_REGION = "ap-northeast-1"
+    _AWS_REGION = "us-east-1"
     _HAS_S3     = False
 
 
@@ -380,7 +381,206 @@ def chat_with_claude(claude_msgs: list, api_key: str):
         msgs.append({"role": "user", "content": tool_results})
 
 
+# ── Amazon Bedrock（Claude via Bedrock）──────────────────────────────────────
+
+def _claude_tools_to_bedrock(claude_tools: list) -> dict:
+    """將 Anthropic SDK 格式的 CLAUDE_TOOLS 轉換為 Bedrock converse API toolConfig 格式。"""
+    return {
+        "tools": [
+            {
+                "toolSpec": {
+                    "name":        t["name"],
+                    "description": t.get("description", ""),
+                    "inputSchema": {"json": t["input_schema"]},
+                }
+            }
+            for t in claude_tools
+        ]
+    }
+
+
+def _claude_msgs_to_bedrock(claude_msgs: list) -> tuple[str, list]:
+    """將 Anthropic SDK 格式的 claude_msgs 轉換為 Bedrock converse messages + system text。
+
+    Anthropic SDK 格式：
+      - system: 獨立參數（不在 messages 裡）
+      - tool_use: {"type":"tool_use","id":...,"name":...,"input":{...}}
+      - tool_result: {"type":"tool_result","tool_use_id":...,"content":...}
+
+    Bedrock converse 格式：
+      - system: [{"text":"..."}]
+      - toolUse: {"toolUseId":...,"name":...,"input":{...}}
+      - toolResult: {"toolUseId":...,"content":[{"text":"..."}]}
+    """
+    system_text = ""
+    bedrock_msgs = []
+
+    for m in claude_msgs:
+        role = m.get("role", "")
+        content = m.get("content", "")
+
+        if role == "system":
+            system_text = content if isinstance(content, str) else json.dumps(content)
+            continue
+
+        if role == "user":
+            if isinstance(content, str):
+                bedrock_msgs.append({"role": "user", "content": [{"text": content}]})
+            elif isinstance(content, list):
+                # 可能含 tool_result 塊
+                blocks = []
+                for blk in content:
+                    if isinstance(blk, dict) and blk.get("type") == "tool_result":
+                        result_content = blk.get("content", "")
+                        if isinstance(result_content, list):
+                            result_content = " ".join(
+                                b.get("text", "") for b in result_content if isinstance(b, dict)
+                            )
+                        blocks.append({
+                            "toolResult": {
+                                "toolUseId": blk.get("tool_use_id", ""),
+                                "content": [{"text": str(result_content)}],
+                            }
+                        })
+                    elif isinstance(blk, dict) and blk.get("type") == "text":
+                        blocks.append({"text": blk.get("text", "")})
+                    elif isinstance(blk, str):
+                        blocks.append({"text": blk})
+                if blocks:
+                    bedrock_msgs.append({"role": "user", "content": blocks})
+
+        elif role == "assistant":
+            if isinstance(content, str):
+                if content:
+                    bedrock_msgs.append({"role": "assistant", "content": [{"text": content}]})
+            elif isinstance(content, list):
+                blocks = []
+                for blk in content:
+                    if isinstance(blk, dict):
+                        if blk.get("type") == "text" and blk.get("text"):
+                            blocks.append({"text": blk["text"]})
+                        elif blk.get("type") == "tool_use":
+                            blocks.append({
+                                "toolUse": {
+                                    "toolUseId": blk.get("id", ""),
+                                    "name":      blk.get("name", ""),
+                                    "input":     blk.get("input", {}),
+                                }
+                            })
+                if blocks:
+                    bedrock_msgs.append({"role": "assistant", "content": blocks})
+
+    return system_text, bedrock_msgs
+
+
+def chat_with_bedrock(claude_msgs: list):
+    """Bedrock Claude + tool_use 循環（替換 chat_with_claude，複用相同的 claude_msgs 格式）。
+    回傳 (final_text, tool_log, updated_claude_msgs)。
+    """
+    import boto3 as _b3
+
+    bedrock = _b3.client("bedrock-runtime", region_name=_AWS_REGION)
+    bedrock_model = os.getenv("BEDROCK_FRONTEND_MODEL", "us.anthropic.claude-sonnet-4-5")
+
+    msgs = _sanitize_claude_msgs(list(claude_msgs))
+    log  = []
+    tool_config = _claude_tools_to_bedrock(CLAUDE_TOOLS)
+
+    while True:
+        system_text, bedrock_msgs = _claude_msgs_to_bedrock(msgs)
+
+        kwargs = dict(
+            modelId=bedrock_model,
+            messages=bedrock_msgs,
+            inferenceConfig={"maxTokens": 2048, "temperature": 0.1},
+            toolConfig=tool_config,
+        )
+        if system_text:
+            kwargs["system"] = [{"text": system_text}]
+
+        time.sleep(1)  # Bedrock ≤1 RPS 規範
+        resp        = bedrock.converse(**kwargs)
+        output_msg  = resp["output"]["message"]
+        stop_reason = resp.get("stopReason", "")
+
+        # 收集文字與工具呼叫
+        reply_text = ""
+        tool_uses  = []
+        for block in output_msg.get("content", []):
+            if "text" in block:
+                reply_text += block["text"]
+            elif "toolUse" in block:
+                tool_uses.append(block["toolUse"])
+
+        # 把 assistant 回應轉回 Anthropic SDK 格式存入 msgs（維持格式統一）
+        assistant_content = []
+        if reply_text:
+            assistant_content.append({"type": "text", "text": reply_text})
+        for tu in tool_uses:
+            assistant_content.append({
+                "type":  "tool_use",
+                "id":    tu["toolUseId"],
+                "name":  tu["name"],
+                "input": tu["input"],
+            })
+        msgs.append({"role": "assistant", "content": assistant_content})
+
+        if not tool_uses or stop_reason == "end_turn":
+            return reply_text, log, msgs
+
+        # 執行工具
+        tool_results = []
+        for tu in tool_uses:
+            tool_name = tu["name"]
+            tool_args = tu["input"]
+
+            # submit_inquiry / enroll_gym_course 攔截 → 跳到確認表單
+            if tool_name in ("submit_inquiry", "enroll_gym_course"):
+                prefill = dict(tool_args)
+                if tool_name == "enroll_gym_course":
+                    prefill["_enroll"] = True
+                if not prefill.get("user_id"):
+                    prefill["user_id"] = st.session_state.get("user_id") or 0
+                st.session_state.inquiry_prefill  = prefill
+                st.session_state.inquiry_products = _products_from_submit(prefill)
+                st.session_state.stage            = "inquiry_form"
+                # 移除 dangling assistant 避免下次 API 400
+                if msgs and msgs[-1].get("role") == "assistant":
+                    msgs.pop()
+                return reply_text or "（為您開啟報名確認表單 📋）", log, msgs
+
+            # 自動注入 GPS
+            _GPS_TOOLS_B = {"find_nearby_stores", "get_weather", "find_sports_venues"}
+            if tool_name in _GPS_TOOLS_B and not tool_args.get("lat"):
+                _lat = st.session_state.get("user_lat")
+                _lng = st.session_state.get("user_lng")
+                if _lat:
+                    tool_args["lat"] = _lat
+                    tool_args["lng"] = _lng
+
+            result_str  = TOOL_FNS[tool_name](**tool_args)
+            result_dict = json.loads(result_str)
+            log.append({
+                "tool":   tool_name,
+                "params": tool_args,
+                "result": result_dict,
+                "ts":     datetime.now().strftime("%H:%M:%S"),
+                "via":    f"Bedrock ({bedrock_model})",
+            })
+            if tool_name == "get_gym_courses" and result_dict.get("courses"):
+                st.session_state["last_gym_courses"] = result_dict["courses"]
+
+            tool_results.append({
+                "type":        "tool_result",
+                "tool_use_id": tu["toolUseId"],
+                "content":     result_str,
+            })
+
+        msgs.append({"role": "user", "content": tool_results})
+
+
 # ── Ollama 本地 AI + 真實 MCP 工具呼叫 ───────────────────────────────────────
+
 
 def _extract_inquiry_products() -> list:
     """從 mcp_log 或 last_products 快取取出商品清單（fallback 用）。"""
