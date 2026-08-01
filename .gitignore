@@ -18,4 +18,5 @@ check_schema.py
 
 # Claude Code 本地設定（不進 git）
 .claude/
+CLAUDE.md
 
