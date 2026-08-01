@@ -13,7 +13,7 @@ set -euo pipefail
 
 # ── CONFIG ───────────────────────────────────────────────────────────────────
 REPO_URL="${REPO_URL:-https://github.com/yuancc12/AI_Project.git}"
-BRANCH="${BRANCH:-feature/schema-align-pdf}"
+BRANCH="${BRANCH:-main}"
 APP_DIR="${APP_DIR:-/opt/butler}"
 DATA_DIR="${DATA_DIR:-/data}"          # EBS 掛載點（butler.db 存這裡）
 APP_USER="${APP_USER:-ec2-user}"       # Amazon Linux: ec2-user / Ubuntu: ubuntu
