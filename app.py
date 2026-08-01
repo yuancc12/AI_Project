@@ -1624,7 +1624,11 @@ with st.sidebar:
 
     # ── AI 模式設定 ──────────────────────────────────────────────────────────
     with st.expander("⚙️ AI 設定", expanded=False):
-        if st.session_state.api_key:
+        if os.environ.get("USE_BEDROCK"):
+            _bm = os.environ.get("BEDROCK_FRONTEND_MODEL", "us.anthropic.claude-sonnet-4-5")
+            st.success(f"🤖 Amazon Bedrock 模式（{_bm}）")
+            st.caption("由 EC2 IAM Role 授權，無需 API Key。")
+        elif st.session_state.api_key:
             st.success("🤖 Claude AI 模式（claude-sonnet-4-6）")
             entered = st.text_input("重新輸入 Anthropic Key", type="password", key="key_override")
             c1, c2 = st.columns(2)
@@ -2698,9 +2702,11 @@ elif st.session_state.stage == "chat":
         st.session_state["_tog_course_sig"] = ""
         st.rerun()
 
-    using_claude = bool(st.session_state.api_key)
+    _use_bedrock = bool(os.environ.get("USE_BEDROCK"))
+    using_claude = bool(st.session_state.api_key) or _use_bedrock
     using_gpt    = bool(st.session_state.get("openai_key")) and not using_claude
     _ai_badge    = (
+        f"🤖 Bedrock ({os.environ.get('BEDROCK_FRONTEND_MODEL','us.anthropic.claude-sonnet-4-5')})" if _use_bedrock else
         "🤖 Claude AI (claude-sonnet-4-6)" if using_claude else
         "🤖 GPT-4o"                        if using_gpt   else
         f"🤖 Ollama ({OLLAMA_MODEL}) + MCP"
@@ -2723,10 +2729,15 @@ elif st.session_state.stage == "chat":
             with st.chat_message("assistant", avatar="🌿"):
                 with st.spinner("🤔 思考中..."):
                     try:
-                        text, tool_calls, updated = chat_with_claude(
-                            st.session_state.claude_msgs,
-                            st.session_state.api_key,
-                        )
+                        if _use_bedrock:
+                            text, tool_calls, updated = chat_with_bedrock(
+                                st.session_state.claude_msgs,
+                            )
+                        else:
+                            text, tool_calls, updated = chat_with_claude(
+                                st.session_state.claude_msgs,
+                                st.session_state.api_key,
+                            )
                         st.session_state.claude_msgs = updated
                     except anthropic.AuthenticationError:
                         st.error("❌ API Key 無效，已切換至 Ollama 本地 AI 模式。")
@@ -2947,10 +2958,15 @@ div[data-testid="stTextInput"]:has(input[placeholder^="__"]) input{position:abso
                 tool_calls = []
                 with st.spinner("🤔 思考中..."):
                     try:
-                        text, tool_calls, updated = chat_with_claude(
-                            st.session_state.claude_msgs,
-                            st.session_state.api_key,
-                        )
+                        if _use_bedrock:
+                            text, tool_calls, updated = chat_with_bedrock(
+                                st.session_state.claude_msgs,
+                            )
+                        else:
+                            text, tool_calls, updated = chat_with_claude(
+                                st.session_state.claude_msgs,
+                                st.session_state.api_key,
+                            )
                         st.session_state.claude_msgs = updated
                     except anthropic.AuthenticationError:
                         st.error("❌ API Key 無效，已切換至 Ollama 本地 AI 模式。")
