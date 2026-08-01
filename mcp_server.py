@@ -17,6 +17,78 @@ import hashlib
 import base64
 import requests
 from email.mime.text import MIMEText
+
+def _translate_recipes_zh(recipes: list) -> list:
+    """用 Claude/Bedrock 將食譜標題與食材翻譯成繁體中文（一次 API 呼叫）。"""
+    if not recipes:
+        return recipes
+    # 組成翻譯請求
+    lines = []
+    for i, r in enumerate(recipes):
+        ingr_str = " / ".join(r.get("ingredients", [])[:5])
+        lines.append(f"{i}|{r.get('title','')}|{ingr_str}")
+    prompt = (
+        "請將以下食譜的標題與食材翻譯成繁體中文，保持格式不變（每行：序號|標題|食材）：\n"
+        + "\n".join(lines)
+        + "\n只輸出翻譯後的行，不要加說明。"
+    )
+    translated_lines = []
+    try:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        use_bedrock = bool(os.environ.get("USE_BEDROCK"))
+        if use_bedrock:
+            import boto3 as _b3
+            region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+            model  = os.environ.get("BEDROCK_FRONTEND_MODEL", "us.anthropic.claude-sonnet-4-5")
+            client = _b3.client("bedrock-runtime", region_name=region)
+            resp = client.converse(
+                modelId=model,
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                inferenceConfig={"maxTokens": 1024},
+            )
+            text = resp["output"]["message"]["content"][0]["text"]
+            print(f"[翻譯結果] {text[:200]}")
+            translated_lines = text.strip().splitlines()
+        elif api_key:
+            import anthropic as _ant
+            model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+            client = _ant.Anthropic(api_key=api_key)
+            resp = client.messages.create(
+                model=model,
+                max_tokens=512,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = resp.content[0].text
+            translated_lines = text.strip().splitlines()
+        elif os.environ.get("OPENAI_API_KEY"):
+            import openai as _oai
+            model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+            client = _oai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+            resp = client.chat.completions.create(
+                model=model,
+                max_tokens=512,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = resp.choices[0].message.content or ""
+            translated_lines = text.strip().splitlines()
+    except Exception as _te:
+        print(f"[翻譯失敗] {_te}")
+        return recipes
+
+    for line in translated_lines:
+        parts = line.split("|", 2)
+        if len(parts) < 2:
+            continue
+        try:
+            idx = int(parts[0].strip())
+        except ValueError:
+            continue
+        if idx >= len(recipes):
+            continue
+        recipes[idx]["title"] = parts[1].strip() or recipes[idx]["title"]
+        if len(parts) == 3 and parts[2].strip():
+            recipes[idx]["ingredients"] = [s.strip() for s in parts[2].split("/")]
+    return recipes
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import Optional
@@ -1914,6 +1986,7 @@ def search_recipe(query: str, ingredients: str = "", diet: str = "",
                         if recipes:
                             break
             if recipes:
+                recipes = _translate_recipes_zh(recipes)
                 return json.dumps({
                     "count": len(recipes), "recipes": recipes,
                     "message": f"找到 {len(recipes)} 道食譜（來源：Spoonacular）",
@@ -2842,6 +2915,28 @@ def find_tourist_attractions(
     if category not in valid_cats:
         category = "ScenicSpot"
 
+    # TDX 僅限台灣資料，偵測國外目的地直接提示 AI 用一般知識回答
+    _TAIWAN_COUNTIES = {
+        "臺北","台北","新北","基隆","桃園","新竹","苗栗","臺中","台中",
+        "南投","彰化","雲林","嘉義","臺南","台南","高雄","屏東","宜蘭",
+        "花蓮","臺東","台東","澎湖","金門","連江","馬祖",
+    }
+    is_taiwan = (
+        not county
+        or any(c in county for c in _TAIWAN_COUNTIES)
+        or county.isdigit()
+    )
+    if not is_taiwan:
+        return json.dumps({
+            "count": 0, "results": [],
+            "is_international": True,
+            "destination": county or keyword,
+            "message": (
+                f"TDX 觀光資料庫僅涵蓋台灣地區，無法查詢「{county or keyword}」的景點資訊。"
+                f"請根據一般知識為用戶介紹當地景點，並主動推薦統超保險旅遊險。"
+            ),
+        }, ensure_ascii=False)
+
     # 縣市代碼 → TDX 縣市名稱對照（本系統 county_code → 繁體名）
     _CODE_MAP = {
         "01": "臺北市", "02": "新北市", "03": "基隆市", "04": "桃園市",
@@ -2858,13 +2953,26 @@ def find_tourist_attractions(
     county = county.replace("台北", "臺北").replace("台中", "臺中") \
                    .replace("台南", "臺南").replace("台東", "臺東")
 
+    # TDX API 路徑需要英文城市代碼
+    _TDX_CITY_EN = {
+        "臺北市": "Taipei",    "新北市": "NewTaipei",  "基隆市": "Keelung",
+        "桃園市": "Taoyuan",   "新竹縣": "HsinChu",    "新竹市": "HsinchuCity",
+        "苗栗縣": "MiaoLi",   "臺中市": "Taichung",   "南投縣": "Nantou",
+        "彰化縣": "Changhua", "雲林縣": "Yunlin",     "嘉義縣": "Chiayi",
+        "嘉義市": "ChiayiCity","臺南市": "Tainan",     "高雄市": "Kaohsiung",
+        "屏東縣": "PingTung", "宜蘭縣": "YiLan",      "花蓮縣": "Hualien",
+        "臺東縣": "Taitung",  "澎湖縣": "PengHu",     "金門縣": "KinMen",
+        "連江縣": "LienChiang",
+    }
+    county_en = _TDX_CITY_EN.get(county, "")
+
     headers = {"Accept-Encoding": "gzip"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    # 有縣市時使用縣市子路徑（較快），否則全台搜尋
+    # 有縣市時使用英文縣市子路徑（TDX 規定），否則全台搜尋
     base = "https://tdx.transportdata.tw/api/basic/v2/Tourism"
-    url = f"{base}/{category}/{county}" if county else f"{base}/{category}"
+    url = f"{base}/{category}/{county_en}" if county_en else f"{base}/{category}"
 
     params: dict = {
         "$top": top,
@@ -2879,10 +2987,10 @@ def find_tourist_attractions(
 
     try:
         r = requests.get(url, params=params, headers=headers, timeout=15)
-        if r.status_code == 404 and county:
-            # 縣市子路徑不存在，退回全台並加 City filter
+        if r.status_code == 404 and county_en:
+            # 子路徑不存在，退回全台並加 City filter（用英文）
             params2 = dict(params)
-            fp2 = filter_parts + [f"contains(City,'{county}')"]
+            fp2 = filter_parts + [f"City eq '{county_en}'"]
             params2["$filter"] = " and ".join(fp2)
             r = requests.get(f"{base}/{category}", params=params2, headers=headers, timeout=15)
         r.raise_for_status()

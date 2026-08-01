@@ -1047,6 +1047,7 @@ TOOL_META    = {
     "recommend_after_meal":   ("💡", "飲食後補充推薦"),
     "calculate_tdee":           ("🧮", "個人化TDEE計算"),
     "get_all_fitness_products": ("🛒", "全商品庫瀏覽"),
+    "search_recipe":            ("🍽️", "食譜搜尋"),
 }
 
 _CHAIN_MAP_COLOR = {
@@ -1189,11 +1190,49 @@ def _course_card(c: dict) -> str:
     )
 
 
+def _recipe_card(r: dict) -> str:
+    title = r.get("title", "")
+    mins  = r.get("ready_in_minutes", 0)
+    serv  = r.get("servings", 0)
+    ingrs = r.get("ingredients", [])
+    ingr_preview = "、".join(ingrs[:3]) + ("..." if len(ingrs) > 3 else "")
+    time_str = f"⏱ {mins}分" if mins else ""
+    serv_str = f"👥 {serv}人" if serv else ""
+    return (
+        f'<div style="min-width:165px;max-width:185px;border-radius:16px;overflow:hidden;'
+        f'box-shadow:0 2px 10px rgba(0,0,0,.10);flex-shrink:0;background:#fff;'
+        f'border:1.5px solid #e8e8e8;">'
+        f'<div style="background:#FF7043;padding:22px 10px;text-align:center;'
+        f'font-size:42px;line-height:1.1;">🍽️</div>'
+        f'<div style="padding:10px 12px 12px;">'
+        f'<div style="font-weight:700;font-size:13px;color:#111;'
+        f'overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;'
+        f'-webkit-box-orient:vertical;">{title}</div>'
+        f'<div style="font-size:11px;color:#999;margin:2px 0;">{time_str}&nbsp;&nbsp;{serv_str}</div>'
+        f'<div style="font-size:11px;color:#555;margin:4px 0;line-height:1.6;'
+        f'overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">'
+        f'🧂 {ingr_preview}</div>'
+        f'</div></div>'
+    )
+
+
 _CAROUSEL_WRAP = ('<div style="display:flex;overflow-x:auto;gap:12px;padding:8px 2px 12px;'
                   '-webkit-overflow-scrolling:touch;scrollbar-width:thin;">', '</div>')
 
 
+
 def render_tool_results(tool_calls: list, msg_idx: int = 0):
+    # 先收集所有 search_grocery 的商品，最後合併成一個 carousel
+    _grocery_pool: list = []
+    for _tc in tool_calls:
+        if _tc["tool"] in ("search_grocery", "check_inventory"):
+            _prods = _tc["result"].get("products") or _tc["result"].get("items", [])
+            for _p in _prods:
+                if _p not in _grocery_pool:
+                    _grocery_pool.append(_p)
+
+    _grocery_rendered = False
+
     for tc in tool_calls:
         tool   = tc["tool"]
         result = tc["result"]
@@ -1320,10 +1359,45 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
                     st.markdown(_html, unsafe_allow_html=True)
             continue
 
+        # ── 食譜列表 ─────────────────────────────────────────────────────────
+        if tool == "search_recipe":
+            recipes = result.get("recipes", [])
+            with st.expander(f"🍽️ 食譜 — {result.get('message', '')}", expanded=True):
+                if not recipes:
+                    st.info(result.get("message", "無食譜結果"))
+                else:
+                    _html = _CAROUSEL_WRAP[0]
+                    for _r in recipes:
+                        _html += _recipe_card(_r)
+                    _html += _CAROUSEL_WRAP[1]
+                    st.markdown(_html, unsafe_allow_html=True)
+            continue
+
         # ── 商品列表（search / recommend / inventory）────────────────────────
         if isinstance(result, list):
             result = {"products": result, "message": f"共 {len(result)} 項商品"}
         products = result.get("products") or result.get("items", [])
+
+        # search_grocery / check_inventory：合併到 pool，最後一起顯示
+        if tool in ("search_grocery", "check_inventory"):
+            # 最後一個 grocery 工具才統一渲染
+            is_last_grocery = not any(
+                t["tool"] in ("search_grocery", "check_inventory")
+                for t in tool_calls[tool_calls.index(tc) + 1:]
+            )
+            if is_last_grocery and _grocery_pool and not _grocery_rendered:
+                _grocery_rendered = True
+                with st.expander(f"🛒 相關食材商品 — 共 {len(_grocery_pool)} 項", expanded=True):
+                    _html = _CAROUSEL_WRAP[0]
+                    for p in _grocery_pool:
+                        _html += _product_card(p, f"{msg_idx}_grocery")
+                    _html += _CAROUSEL_WRAP[1]
+                    st.markdown(_html, unsafe_allow_html=True)
+            continue
+
+        # SKIP 訊息（搜不到商品）不顯示任何 UI
+        if not products and result.get("message", "").startswith("SKIP"):
+            continue
         with st.expander(f"{icon} {label} — {result.get('message', '')}", expanded=True):
             if not products:
                 st.info(result.get("message", "無結果"))
@@ -2701,7 +2775,6 @@ elif st.session_state.stage == "chat":
         st.session_state.selected_courses = _sc3
         st.session_state["_tog_course_sig"] = ""
         st.rerun()
-
     _use_bedrock = bool(os.environ.get("USE_BEDROCK"))
     using_claude = bool(st.session_state.api_key) or _use_bedrock
     using_gpt    = bool(st.session_state.get("openai_key")) and not using_claude
