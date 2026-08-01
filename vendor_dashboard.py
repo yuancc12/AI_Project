@@ -843,24 +843,24 @@ with (tab2 if tab2 is not None else _null):
                     if status == "01":
                         if _dtype == "自取":
                             b1, b2, b3 = st.columns([2, 2, 3])
-                            if b1.button("📦 預留商品", key=f"rsv_{inq['id']}", type="primary"):
+                            if b1.button("📦 預留商品", key=f"rsv_{inq['feedback_no']}", type="primary"):
                                 st.session_state[f"act_{inq_id}"] = "reserve"
-                            if b2.button("❌ 拒絕", key=f"rej_{inq['id']}"):
+                            if b2.button("❌ 拒絕", key=f"rej_{inq['feedback_no']}"):
                                 st.session_state[f"act_{inq_id}"] = "reject"
                         else:
                             b1, b2, _ = st.columns([2, 2, 3])
-                            if b1.button("✅ 接受", key=f"acc_{inq['id']}", type="primary"):
+                            if b1.button("✅ 接受", key=f"acc_{inq['feedback_no']}", type="primary"):
                                 st.session_state[f"act_{inq_id}"] = "accept"
-                            if b2.button("❌ 拒絕", key=f"rej_{inq['id']}"):
+                            if b2.button("❌ 拒絕", key=f"rej_{inq['feedback_no']}"):
                                 st.session_state[f"act_{inq_id}"] = "reject"
                     elif status == "02":
                         if st.button(
                             f"📦 加入配送（{_vendor_brand} 本通路商品）",
-                            key=f"join_{inq['id']}", type="secondary",
+                            key=f"join_{inq['feedback_no']}", type="secondary",
                         ):
                             st.session_state[f"act_{inq_id}"] = "accept"
                     elif status == "03":
-                        if st.button("✅ 確認顧客已取件", key=f"done_{inq['id']}", type="primary"):
+                        if st.button("✅ 確認顧客已取件", key=f"done_{inq['feedback_no']}", type="primary"):
                             st.session_state[f"act_{inq_id}"] = "complete"
 
                     action = st.session_state.get(f"act_{inq_id}")
