@@ -3027,6 +3027,11 @@ elif st.session_state.stage == "chat":
         st.session_state.selected_courses = _sc3
         st.session_state["_tog_course_sig"] = ""
         st.rerun()
+    _qrs_val = st.session_state.get("_qr_send_sig", "")
+    if _qrs_val:
+        st.session_state["_pending_prompt"] = _qrs_val
+        st.session_state["_qr_send_sig"] = ""
+        st.rerun()
     _use_bedrock = bool(os.environ.get("USE_BEDROCK"))
     using_claude = bool(st.session_state.api_key) or _use_bedrock
     using_gpt    = bool(st.session_state.get("openai_key")) and not using_claude
@@ -3177,25 +3182,30 @@ elif st.session_state.stage == "chat":
             if msg.get("tool_calls"):
                 render_tool_results(msg["tool_calls"], msg_idx=_midx)
 
-    # ── Quick Reply Chips（食材推薦後顯示）────────────────────────────
-    _food_kw = ["食材","推薦","購買","蔬菜","蛋白質","食譜","配料","克","卡路里","搜尋到","建議","商品","烹飪","高湯","豆腐","雞胸","鮭魚","蝦仁"]
+    # ── Quick Reply Chips（食材推薦後顯示，左右滑動）───────────────────
+    _food_kw = ["食材","推薦","購買","蔬菜","蛋白質","食譜","配料","克","卡路里","搜尋到","建議","商品","烹飪","高湯","豆腐","雞胸","鮭魚","蝦仁","番茄","紅蘿蔔"]
     if st.session_state.display_msgs:
         _last_m = st.session_state.display_msgs[-1]
         if _last_m["role"] == "assistant" and any(kw in _last_m.get("content","") for kw in _food_kw):
             _quick_chips = [
                 ("🛒 我想要購買", "我想要購買"),
-                ("✅ 確認", "確認"),
+                ("✅ 確認下單", "確認下單"),
                 ("🔍 還有其他推薦嗎？", "還有其他推薦嗎？"),
+                ("📦 查看購物車", "查看購物車"),
+                ("🍽️ 推薦食譜", "根據這些食材推薦食譜"),
             ]
-            _chips_html = '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 4px 48px;">'
+            _chips_html = (
+                '<div style="display:flex;overflow-x:auto;gap:8px;padding:6px 2px 6px 48px;'
+                '-webkit-overflow-scrolling:touch;scrollbar-width:none;">'
+            )
             for _label, _val in _quick_chips:
-                _enc = _url_quote(_val)
                 _chips_html += (
-                    f'<a href="?qr={_enc}" style="display:inline-flex;align-items:center;'
+                    f'<span data-ph="__qr_send__" data-name="{_val}" '
+                    f'style="display:inline-flex;align-items:center;flex-shrink:0;cursor:pointer;'
                     f'padding:6px 16px;background:#EBF3FF;color:#0057A8;border:1.5px solid #0057A8;'
-                    f'border-radius:999px;font-size:0.82rem;font-weight:600;text-decoration:none;'
-                    f'white-space:nowrap;transition:background .15s;">'
-                    f'{_label}</a>'
+                    f'border-radius:999px;font-size:0.82rem;font-weight:600;'
+                    f'white-space:nowrap;user-select:none;">'
+                    f'{_label}</span>'
                 )
             _chips_html += '</div>'
             st.markdown(_chips_html, unsafe_allow_html=True)
@@ -3229,6 +3239,7 @@ div[data-testid="stTextInput"]:has(input[placeholder^="__"]) input{position:abso
 </style>""", unsafe_allow_html=True)
     st.text_input("_add", placeholder="__add_cart__",   key="_add_cart_sig",   label_visibility="collapsed")
     st.text_input("_tog", placeholder="__tog_course__", key="_tog_course_sig", label_visibility="collapsed")
+    st.text_input("_qrs", placeholder="__qr_send__",    key="_qr_send_sig",    label_visibility="collapsed")
     import streamlit.components.v1 as _stc
     _stc.html("""<script>
 (function(){
