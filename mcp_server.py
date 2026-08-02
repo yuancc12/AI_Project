@@ -2047,7 +2047,7 @@ def search_recipe(query: str, ingredients: str = "", diet: str = "",
     if spoon_tried:
         return json.dumps({
             "count": 0, "recipes": [],
-            "message": f"找不到「{query}」的相關食譜，建議用英文關鍵字，例如「pasta」「chicken rice」「stir fry」。",
+            "message": f"找不到「{query}」的相關食譜，建議改用常見食材名稱，例如「雞胸肉」「鮭魚」「番茄炒蛋」「蒸蛋」「豆腐」。",
         }, ensure_ascii=False)
 
     return json.dumps({

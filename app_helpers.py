@@ -658,8 +658,8 @@ CLAUDE_TOOLS = [
             "依食材或料理名稱搜尋食譜，回傳食材清單、烹飪步驟與所需時間。\n"
             "當用戶問「用雞胸肉可以做什麼」「推薦低卡晚餐」「蛋炒飯怎麼做」時呼叫。\n"
             "優先使用 Spoonacular API，若未設定則改用 Edamam Recipe API。\n"
-            "query 盡量用英文效果最好（如 chicken breast、pasta、fried rice）；"
-            "中文也可，但 API 回傳結果可能較少。"
+            "query 請用單一食材或簡單料理名（如 chicken breast、salmon、tomato egg）；"
+            "避免用長句或描述性語句，單字或兩字效果最好。"
         ),
         "input_schema": {
             "type": "object",
