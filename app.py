@@ -1423,19 +1423,26 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
 
 st.set_page_config(page_title="統一生活管家", page_icon="🏪", layout="wide")
 
+# ── Font Awesome ──────────────────────────────────────────────────────────────
+st.markdown(
+    '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">',
+    unsafe_allow_html=True,
+)
+
 # ── 全域 CSS 美化 ─────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap');
 
 :root {
-  --green: #00833D;
-  --green-light: #E8F5EE;
-  --green-dark: #005C2B;
-  --orange: #FF6600;
-  --orange-light: #FFF3EB;
+  --blue:        #0057A8;
+  --blue-dark:   #003D7A;
+  --blue-light:  #EBF3FF;
+  --orange:      #F7941D;
+  --orange-dark: #D4780A;
+  --orange-light:#FFF4E6;
   --shadow-sm: 0 2px 8px rgba(0,0,0,.08);
-  --shadow-md: 0 4px 20px rgba(0,0,0,.12);
+  --shadow-md: 0 4px 20px rgba(0,0,0,.13);
   --radius: 14px;
 }
 
@@ -1443,33 +1450,31 @@ html, body, [class*="css"] {
   font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif !important;
 }
 
-/* ── 隱藏預設 Streamlit header/footer ── */
 #MainMenu, footer, header { visibility: hidden; }
 
-/* ── 頁面背景 ── */
-.stApp { background: #F4F8F6; }
+.stApp { background: #F2F5FA; }
 .stApp > header { background: transparent !important; }
 
-/* ── 自訂頂部 banner ── */
+/* ── Hero banner（藍→橘漸層）── */
 .app-hero {
-  background: linear-gradient(135deg, #00833D 0%, #00A34F 60%, #FF6600 100%);
-  border-radius: 0 0 20px 20px;
+  background: linear-gradient(135deg, #003D7A 0%, #0057A8 55%, #F7941D 100%);
+  border-radius: 0 0 22px 22px;
   padding: 18px 28px 16px;
   margin: -1rem -1rem 1.5rem;
   display: flex; align-items: center; gap: 14px;
-  box-shadow: 0 4px 18px rgba(0,131,61,.25);
+  box-shadow: 0 4px 20px rgba(0,61,122,.30);
 }
 .app-hero h1 {
   color: #fff !important; font-size: 1.5rem !important;
   margin: 0 !important; padding: 0 !important;
-  font-weight: 700 !important; text-shadow: 0 1px 4px rgba(0,0,0,.2);
+  font-weight: 700 !important; text-shadow: 0 1px 4px rgba(0,0,0,.25);
 }
 .app-hero .subtitle {
-  color: rgba(255,255,255,.85) !important; font-size: 0.78rem;
+  color: rgba(255,255,255,.82) !important; font-size: 0.78rem;
   margin: 2px 0 0 !important;
 }
 
-/* ── 按鈕美化 ── */
+/* ── 按鈕 ── */
 div.stButton > button {
   border-radius: 10px !important;
   font-weight: 600 !important;
@@ -1478,19 +1483,19 @@ div.stButton > button {
 }
 div.stButton > button:hover {
   transform: translateY(-2px) !important;
-  box-shadow: 0 6px 18px rgba(0,131,61,.25) !important;
+  box-shadow: 0 6px 18px rgba(0,87,168,.22) !important;
 }
 div.stButton > button[kind="primary"] {
-  background: linear-gradient(135deg, #00833D, #00A34F) !important;
+  background: linear-gradient(135deg, #0057A8, #1A78D0) !important;
   border: none !important;
-  box-shadow: 0 3px 10px rgba(0,131,61,.30) !important;
+  box-shadow: 0 3px 10px rgba(0,87,168,.30) !important;
 }
 div.stButton > button[kind="primary"]:hover {
-  background: linear-gradient(135deg, #005C2B, #00833D) !important;
-  box-shadow: 0 6px 18px rgba(0,131,61,.40) !important;
+  background: linear-gradient(135deg, #003D7A, #0057A8) !important;
+  box-shadow: 0 6px 18px rgba(0,87,168,.40) !important;
 }
 
-/* ── 聊天訊息動畫 ── */
+/* ── 聊天訊息 ── */
 @keyframes fadeInUp {
   from { opacity:0; transform:translateY(10px); }
   to   { opacity:1; transform:translateY(0);    }
@@ -1500,16 +1505,13 @@ div.stButton > button[kind="primary"]:hover {
   border-radius: var(--radius) !important;
   margin-bottom: .6rem !important;
 }
-/* 用戶訊息 */
-[data-testid="stChatMessage"][data-testid*="user"],
 .stChatMessage:has([data-testid="chatAvatarIcon-user"]) {
-  background: linear-gradient(135deg, #E8F5EE, #D4EEE1) !important;
-  border: 1px solid #C0E0CE !important;
+  background: linear-gradient(135deg, #EBF3FF, #D6E8FF) !important;
+  border: 1px solid #B8D4F5 !important;
 }
-/* AI 訊息 */
 .stChatMessage:has([data-testid="chatAvatarIcon-assistant"]) {
   background: #fff !important;
-  border: 1px solid #E8E8E8 !important;
+  border: 1px solid #E4E8EE !important;
   box-shadow: var(--shadow-sm) !important;
 }
 
@@ -1518,12 +1520,12 @@ div.stButton > button[kind="primary"]:hover {
   background: #fff !important;
   border-radius: 16px !important;
   box-shadow: 0 2px 12px rgba(0,0,0,.1) !important;
-  border: 2px solid #C8E6D4 !important;
+  border: 2px solid #B8D4F5 !important;
   transition: border-color .2s;
 }
 .stChatInputContainer:focus-within {
-  border-color: var(--green) !important;
-  box-shadow: 0 2px 16px rgba(0,131,61,.15) !important;
+  border-color: var(--blue) !important;
+  box-shadow: 0 2px 16px rgba(0,87,168,.15) !important;
 }
 
 /* ── Metric 卡片 ── */
@@ -1532,14 +1534,14 @@ div.stButton > button[kind="primary"]:hover {
   border-radius: var(--radius) !important;
   padding: 14px 18px !important;
   box-shadow: var(--shadow-sm) !important;
-  border-left: 4px solid var(--green) !important;
+  border-left: 4px solid var(--blue) !important;
   transition: transform .2s, box-shadow .2s;
 }
 [data-testid="stMetric"]:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-md) !important;
 }
-[data-testid="stMetricValue"] { color: var(--green-dark) !important; font-weight: 700 !important; }
+[data-testid="stMetricValue"] { color: var(--blue-dark) !important; font-weight: 700 !important; }
 
 /* ── Tabs ── */
 .stTabs [data-baseweb="tab-list"] {
@@ -1547,19 +1549,19 @@ div.stButton > button[kind="primary"]:hover {
   border-radius: 12px 12px 0 0 !important;
   padding: 6px 6px 0 !important;
   gap: 4px !important;
-  box-shadow: 0 -1px 0 #E0E0E0 inset;
+  box-shadow: 0 -1px 0 #DDE3EC inset;
 }
 .stTabs [data-baseweb="tab"] {
   border-radius: 8px 8px 0 0 !important;
   font-weight: 600 !important;
-  color: #666 !important;
+  color: #555 !important;
   padding: 8px 16px !important;
   transition: background .2s, color .2s !important;
 }
 .stTabs [aria-selected="true"] {
-  background: var(--green-light) !important;
-  color: var(--green-dark) !important;
-  border-bottom: 3px solid var(--green) !important;
+  background: var(--blue-light) !important;
+  color: var(--blue-dark) !important;
+  border-bottom: 3px solid var(--blue) !important;
 }
 
 /* ── Expander ── */
@@ -1567,44 +1569,44 @@ div.stButton > button[kind="primary"]:hover {
   background: #fff !important;
   border-radius: var(--radius) !important;
   font-weight: 600 !important;
-  border: 1px solid #E0EDE6 !important;
+  border: 1px solid #D6E2EF !important;
   transition: background .2s;
 }
-.streamlit-expanderHeader:hover { background: var(--green-light) !important; }
+.streamlit-expanderHeader:hover { background: var(--blue-light) !important; }
 
-/* ── Input / Select ── */
+/* ── Input ── */
 .stTextInput input, .stSelectbox select, .stTextArea textarea {
   border-radius: 10px !important;
-  border: 1.5px solid #D0E6DA !important;
+  border: 1.5px solid #C8D8EE !important;
   transition: border-color .2s, box-shadow .2s !important;
 }
 .stTextInput input:focus, .stTextArea textarea:focus {
-  border-color: var(--green) !important;
-  box-shadow: 0 0 0 3px rgba(0,131,61,.12) !important;
+  border-color: var(--blue) !important;
+  box-shadow: 0 0 0 3px rgba(0,87,168,.12) !important;
 }
 
-/* ── Success / Info / Warning / Error ── */
+/* ── Alert ── */
 [data-testid="stAlert"] { border-radius: var(--radius) !important; }
 
 /* ── Sidebar ── */
 [data-testid="stSidebar"] {
-  background: linear-gradient(180deg, #00410F 0%, #005C2B 40%, #002D17 100%) !important;
+  background: #fff !important;
+  border-right: 2px solid #D0DFF0 !important;
 }
-[data-testid="stSidebar"] * { color: #E8F5EE !important; }
 [data-testid="stSidebar"] .stButton > button {
-  background: rgba(255,255,255,.12) !important;
-  border: 1px solid rgba(255,255,255,.2) !important;
-  color: #fff !important;
+  background: #F0F5FC !important;
+  border: 1px solid #C4D6EE !important;
+  color: #1A1A1A !important;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+  background: var(--blue-light) !important;
+  border-color: var(--blue) !important;
 }
 [data-testid="stSidebar"] .stButton > button[kind="primary"] {
-  background: linear-gradient(135deg, var(--orange), #FF8800) !important;
+  background: linear-gradient(135deg, var(--orange), #FFAA44) !important;
   border: none !important;
   color: #fff !important;
-}
-[data-testid="stSidebar"] input {
-  background: rgba(255,255,255,.1) !important;
-  border-color: rgba(255,255,255,.25) !important;
-  color: #fff !important;
+  box-shadow: 0 3px 10px rgba(247,148,29,.30) !important;
 }
 
 /* ── 登入卡片 ── */
@@ -1613,13 +1615,13 @@ div.stButton > button[kind="primary"]:hover {
   border-radius: 20px;
   padding: 32px;
   box-shadow: 0 8px 40px rgba(0,0,0,.12);
-  border: 1px solid #E0EDE6;
+  border: 1px solid #D6E2EF;
 }
 
-/* ── 表單 section 標題 ── */
+/* ── section 標題 ── */
 .section-label {
   font-weight: 700;
-  color: var(--green-dark);
+  color: var(--blue-dark);
   font-size: 1.05rem;
   border-left: 4px solid var(--orange);
   padding-left: 10px;
@@ -1627,7 +1629,33 @@ div.stButton > button[kind="primary"]:hover {
 }
 
 /* ── Divider ── */
-hr { border-color: #E0EDE6 !important; }
+hr { border-color: #D6E2EF !important; }
+
+/* ── AI 打字動畫 ── */
+.typing-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: #fff;
+  border-radius: 18px;
+  border: 1px solid #E4E8EE;
+  box-shadow: var(--shadow-sm);
+}
+.typing-indicator span {
+  width: 9px; height: 9px;
+  background: var(--blue);
+  border-radius: 50%;
+  display: inline-block;
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+.typing-indicator span:nth-child(1) { animation-delay: 0s; }
+.typing-indicator span:nth-child(2) { animation-delay: 0.22s; }
+.typing-indicator span:nth-child(3) { animation-delay: 0.44s; }
+@keyframes typing-bounce {
+  0%, 80%, 100% { transform: translateY(0) scale(0.7); opacity: 0.4; }
+  40%           { transform: translateY(-6px) scale(1); opacity: 1; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1703,15 +1731,14 @@ for k, v in {
 with st.sidebar:
     if st.session_state.user_id:
         # ── 用戶資訊列 ──────────────────────────────────────────────────────
-        col_u, col_out = st.columns([3, 1])
-        col_u.markdown(f"👤 **{st.session_state.username}**")
-        if col_out.button("登出", key="logout"):
+        st.markdown(f"👤 **{st.session_state.username}**")
+        if st.button("登出", icon=":material/logout:", key="logout", use_container_width=True):
             for k in list(st.session_state.keys()):
                 del st.session_state[k]
             st.rerun()
 
         # ── 操作按鈕 ────────────────────────────────────────────────────────
-        if st.button("➕ 新對話", use_container_width=True, key="new_chat", type="primary"):
+        if st.button("新對話", icon=":material/add_comment:", use_container_width=True, key="new_chat", type="primary"):
             st.session_state.update({
                 "display_msgs":    [],
                 "claude_msgs":     [],
@@ -1725,10 +1752,10 @@ with st.sidebar:
             st.rerun()
 
         b1, b2 = st.columns(2)
-        if b1.button("📦 我的訂單", use_container_width=True, key="goto_orders"):
+        if b1.button("我的訂單", icon=":material/receipt_long:", use_container_width=True, key="goto_orders"):
             st.session_state.stage = "my_orders"
             st.rerun()
-        if b2.button("💬 對話", use_container_width=True, key="goto_chat"):
+        if b2.button("對話", icon=":material/forum:", use_container_width=True, key="goto_chat"):
             st.session_state.stage = "chat"
             st.rerun()
 
@@ -1970,12 +1997,25 @@ with st.sidebar:
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 
-st.markdown("""
+import os as _os
+_LOGO_PATH = _os.path.join(_HERE, "static", "logo.png")
+_logo_html = (
+    '<img src="/app/static/logo.png" style="height:44px;object-fit:contain;filter:brightness(0) invert(1);" alt="logo">'
+    if _os.path.exists(_LOGO_PATH)
+    else '<i class="fa-solid fa-store" style="font-size:2rem;color:#fff;"></i>'
+)
+st.markdown(f"""
 <div class="app-hero">
-  <div style="font-size:2.4rem;line-height:1;">🏪</div>
-  <div>
-    <h1>統一生活管家</h1>
-    <p class="subtitle">統一集團 × AI 助手 ✦ 7-11・萬家福・康是美・統一生機・Mister Donut・Cold Stone・21plus・統一星巴克・聖德科斯</p>
+  <div style="display:flex;align-items:center;gap:14px;">
+    {_logo_html}
+    <div>
+      <h1>統一生活管家</h1>
+      <p class="subtitle">
+        <i class="fa-solid fa-robot" style="font-size:.75rem;opacity:.85;"></i>&nbsp;AI 助手
+        &nbsp;✦&nbsp;
+        <i class="fa-solid fa-store" style="font-size:.72rem;opacity:.85;"></i>&nbsp;7-11・萬家福・康是美・統一生機・Mister Donut・Cold Stone・21plus・統一星巴克・聖德科斯
+      </p>
+    </div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -2008,7 +2048,7 @@ if st.session_state.stage == "login":
         with tab_login:
             u = st.text_input("帳號", key="li_u", placeholder="請輸入帳號")
             p = st.text_input("密碼", type="password", key="li_p", placeholder="請輸入密碼")
-            if st.button("登入", type="primary", use_container_width=True, key="btn_login"):
+            if st.button("登入", icon=":material/login:", type="primary", use_container_width=True, key="btn_login"):
                 user = check_login(u.strip(), p.strip())
                 if user:
                     st.session_state.user_id  = user["id"]
@@ -3014,22 +3054,25 @@ elif st.session_state.stage == "chat":
     if not st.session_state.display_msgs and st.session_state.claude_msgs:
         if using_claude:
             with st.chat_message("assistant", avatar="🌿"):
-                with st.spinner("🤔 思考中..."):
-                    try:
-                        if _use_bedrock:
-                            text, tool_calls, updated = chat_with_bedrock(
-                                st.session_state.claude_msgs,
-                            )
-                        else:
-                            text, tool_calls, updated = chat_with_claude(
-                                st.session_state.claude_msgs,
-                                st.session_state.api_key,
-                            )
-                        st.session_state.claude_msgs = updated
-                    except anthropic.AuthenticationError:
-                        st.error("❌ API Key 無效，已切換至 Ollama 本地 AI 模式。")
-                        st.session_state.api_key = ""
-                        st.rerun()
+                _tp1 = st.empty()
+                _tp1.markdown('<div class="typing-indicator"><span></span><span></span><span></span></div>', unsafe_allow_html=True)
+                try:
+                    if _use_bedrock:
+                        text, tool_calls, updated = chat_with_bedrock(
+                            st.session_state.claude_msgs,
+                        )
+                    else:
+                        text, tool_calls, updated = chat_with_claude(
+                            st.session_state.claude_msgs,
+                            st.session_state.api_key,
+                        )
+                    st.session_state.claude_msgs = updated
+                except anthropic.AuthenticationError:
+                    st.error("❌ API Key 無效，已切換至 Ollama 本地 AI 模式。")
+                    st.session_state.api_key = ""
+                    st.rerun()
+                finally:
+                    _tp1.empty()
                 st.markdown(_strip_images(text))
             st.session_state.display_msgs.append({
                 "role": "assistant", "content": text, "tool_calls": [],
@@ -3243,40 +3286,43 @@ div[data-testid="stTextInput"]:has(input[placeholder^="__"]) input{position:abso
                 st.session_state.claude_msgs.append({"role": "user", "content": _ai_content})
                 text = ""
                 tool_calls = []
-                with st.spinner("🤔 思考中..."):
-                    try:
-                        if _use_bedrock:
-                            text, tool_calls, updated = chat_with_bedrock(
-                                st.session_state.claude_msgs,
-                            )
-                        else:
-                            text, tool_calls, updated = chat_with_claude(
-                                st.session_state.claude_msgs,
-                                st.session_state.api_key,
-                            )
-                        st.session_state.claude_msgs = updated
-                    except anthropic.AuthenticationError:
-                        st.error("❌ API Key 無效，已切換至 Ollama 本地 AI 模式。")
-                        st.session_state.api_key = ""
+                _tp2 = st.empty()
+                _tp2.markdown('<div class="typing-indicator"><span></span><span></span><span></span></div>', unsafe_allow_html=True)
+                try:
+                    if _use_bedrock:
+                        text, tool_calls, updated = chat_with_bedrock(
+                            st.session_state.claude_msgs,
+                        )
+                    else:
+                        text, tool_calls, updated = chat_with_claude(
+                            st.session_state.claude_msgs,
+                            st.session_state.api_key,
+                        )
+                    st.session_state.claude_msgs = updated
+                except anthropic.AuthenticationError:
+                    st.error("❌ API Key 無效，已切換至 Ollama 本地 AI 模式。")
+                    st.session_state.api_key = ""
+                    st.rerun()
+                except Exception as exc:
+                    if (st.session_state.claude_msgs
+                            and st.session_state.claude_msgs[-1].get("content") == prompt):
+                        st.session_state.claude_msgs.pop()
+                    _had_error = True
+                    st.error("❌ AI 暫時無法回應，請稍後重試。")
+                    st.caption(f"錯誤原因：{str(exc)[:150]}")
+                    if st.button("🔄 重試上一則", key="retry_claude", type="primary"):
+                        st.session_state["_pending_prompt"] = prompt
                         st.rerun()
-                    except Exception as exc:
-                        # 清除殘缺 user message，避免 history 帶著爛資料
-                        if (st.session_state.claude_msgs
-                                and st.session_state.claude_msgs[-1].get("content") == prompt):
-                            st.session_state.claude_msgs.pop()
-                        _had_error = True
-                        st.error("❌ AI 暫時無法回應，請稍後重試。")
-                        st.caption(f"錯誤原因：{str(exc)[:150]}")
-                        if st.button("🔄 重試上一則", key="retry_claude", type="primary"):
-                            st.session_state["_pending_prompt"] = prompt
-                            st.rerun()
+                finally:
+                    _tp2.empty()
                 if not _had_error:
                     if st.session_state.stage == "inquiry_form":
                         navigating_to_form = True
                         st.info("📋 正在為您開啟採買確認表單...")
             else:
-                _spin_label = "🤖 GPT-4o 透過 MCP 思考中..." if using_gpt else f"🤖 {OLLAMA_MODEL} 透過 MCP 思考中..."
-                with st.spinner(_spin_label):
+                _tp3 = st.empty()
+                _tp3.markdown('<div class="typing-indicator"><span></span><span></span><span></span></div>', unsafe_allow_html=True)
+                try:
                     _ol_prompt = prompt
                     _cart_ol = st.session_state.get("cart", {})
                     if _cart_ol:
@@ -3292,6 +3338,8 @@ div[data-testid="stTextInput"]:has(input[placeholder^="__"]) input{position:abso
                         _ol_prompt, st.session_state.ollama_history
                     )
                     st.session_state.ollama_history = updated_history
+                finally:
+                    _tp3.empty()
                 if st.session_state.stage == "inquiry_form":
                     navigating_to_form = True
                     st.info("📋 正在為您開啟採買確認表單...")

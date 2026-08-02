@@ -3,8 +3,8 @@ enableStaticServing = true
 address = "0.0.0.0"
 
 [theme]
-primaryColor = "#00833D"
-backgroundColor = "#F8FAF9"
-secondaryBackgroundColor = "#EEFAF3"
+primaryColor = "#0057A8"
+backgroundColor = "#F2F5FA"
+secondaryBackgroundColor = "#EBF3FF"
 textColor = "#1A1A1A"
 font = "sans serif"
