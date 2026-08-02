@@ -343,6 +343,17 @@ CREATE TABLE gym_course (
     is_enable    INTEGER NOT NULL DEFAULT 1
 );
 
+-- 對話紀錄（app_helpers.py _ensure_conversation_table 同步）
+CREATE TABLE IF NOT EXISTS conversation (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    title       TEXT NOT NULL DEFAULT '新對話',
+    disp_json   TEXT NOT NULL DEFAULT '[]',
+    ollama_json TEXT NOT NULL DEFAULT '[]',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
 -- 課程報名記錄（enroll_gym_course 寫入）
 CREATE TABLE course_enrollment (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
