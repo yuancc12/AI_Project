@@ -3032,6 +3032,21 @@ elif st.session_state.stage == "chat":
         st.session_state["_pending_prompt"] = _qrs_val
         st.session_state["_qr_send_sig"] = ""
         st.rerun()
+    _rmc_val = st.session_state.get("_rm_cart_sig", "")
+    if _rmc_val:
+        _c = dict(st.session_state.get("cart", {}))
+        _c.pop(_rmc_val, None)
+        st.session_state.cart = _c
+        st.session_state["_rm_cart_sig"] = ""
+        st.rerun()
+    _rmg_val = st.session_state.get("_rm_course_sig", "")
+    if _rmg_val:
+        _sc = list(st.session_state.get("selected_courses", []))
+        if _rmg_val in _sc:
+            _sc.remove(_rmg_val)
+        st.session_state.selected_courses = _sc
+        st.session_state["_rm_course_sig"] = ""
+        st.rerun()
     _use_bedrock = bool(os.environ.get("USE_BEDROCK"))
     using_claude = bool(st.session_state.api_key) or _use_bedrock
     using_gpt    = bool(st.session_state.get("openai_key")) and not using_claude
@@ -3240,6 +3255,8 @@ div[data-testid="stTextInput"]:has(input[placeholder^="__"]) input{position:abso
     st.text_input("_add", placeholder="__add_cart__",   key="_add_cart_sig",   label_visibility="collapsed")
     st.text_input("_tog", placeholder="__tog_course__", key="_tog_course_sig", label_visibility="collapsed")
     st.text_input("_qrs", placeholder="__qr_send__",    key="_qr_send_sig",    label_visibility="collapsed")
+    st.text_input("_rmc", placeholder="__rm_cart__",    key="_rm_cart_sig",    label_visibility="collapsed")
+    st.text_input("_rmg", placeholder="__rm_course__",  key="_rm_course_sig",  label_visibility="collapsed")
     import streamlit.components.v1 as _stc
     _stc.html("""<script>
 (function(){
@@ -3273,7 +3290,7 @@ div[data-testid="stTextInput"]:has(input[placeholder^="__"]) input{position:abso
             _emo  = _pi.get("emoji") or _product_emoji(_pn)
             _cnt  = f" ×{_qty}" if _qty > 1 else ""
             _ph += (f'<span class="cpill">{_emo} {_pn}{_cnt}'
-                    f'<a href="?rm_cart={_qe(_pn)}" class="rm">✕</a></span>')
+                    f'<span data-ph="__rm_cart__" data-name="{_pn}" class="rm" style="cursor:pointer;">✕</span></span>')
         _ph += '</div>'
         _total = sum(v["price"] * v["qty"] for v in _cart.values())
         _ph += f'<div style="font-size:12px;color:#555;margin:1px 0 4px;">💰 <b>${_total}</b></div>'
@@ -3285,7 +3302,7 @@ div[data-testid="stTextInput"]:has(input[placeholder^="__"]) input{position:abso
         _gh = '<div class="pill-row">'
         for _cn in _sel_courses:
             _gh += (f'<span class="cpill-gym">🏋️ {_cn}'
-                    f'<a href="?rm_course={_qe(_cn)}" class="rm">✕</a></span>')
+                    f'<span data-ph="__rm_course__" data-name="{_cn}" class="rm" style="cursor:pointer;">✕</span></span>')
         _gh += '</div>'
         st.markdown(_gh, unsafe_allow_html=True)
 
