@@ -72,6 +72,7 @@ DROP TABLE IF EXISTS inquiry;
 DROP TABLE IF EXISTS course_enrollment;
 DROP TABLE IF EXISTS gym_course;
 DROP TABLE IF EXISTS partner_vendor;
+DROP TABLE IF EXISTS vendor_users;
 
 CREATE TABLE fitness_product (
     id         INTEGER PRIMARY KEY,
@@ -341,6 +342,17 @@ CREATE TABLE gym_course (
     min_students INTEGER NOT NULL DEFAULT 8,  -- 最低開課人數
     status       TEXT NOT NULL DEFAULT '招生中',  -- 招生中 / 已開課 / 已取消
     is_enable    INTEGER NOT NULL DEFAULT 1
+);
+
+-- 後台廠商帳號
+CREATE TABLE vendor_users (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    username    TEXT NOT NULL UNIQUE,
+    password    TEXT NOT NULL,
+    store_name  TEXT NOT NULL,
+    brand       TEXT NOT NULL,
+    address     TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
 );
 
 -- 對話紀錄（app_helpers.py _ensure_conversation_table 同步）
@@ -1041,6 +1053,26 @@ def main():
         "(id,course_id,feedback_no,contact_name,contact_phone,note,status,notified,enrolled_at) "
         "VALUES (?,?,?,?,?,?,?,?,?)",
         COURSE_ENROLLMENTS,
+    )
+    cur.executemany(
+        "INSERT INTO vendor_users (username,password,store_name,brand,address,created_at) VALUES (?,?,?,?,?,?)",
+        [
+            ("7-11-A",      "vendor123", "7-11 A門市",           "7-11",         "台北市信義區松仁路28號",       now),
+            ("7-11-B",      "vendor123", "7-11 B門市",           "7-11",         "台北市信義區基隆路一段200號",   now),
+            ("wanjiafu",    "vendor123", "萬家福信義店",           "萬家福",       "台北市信義區忠孝東路五段68號",  now),
+            ("cosmed",      "vendor123", "康是美中山店",           "康是美",       "台北市中山區南京東路二段100號", now),
+            ("misterdonut", "vendor123", "Mister Donut 大安店",   "Mister Donut", "台北市大安區忠孝東路四段181號1F", now),
+            ("coldstone",   "vendor123", "Cold Stone 信義店",     "Cold Stone",   "台北市信義區松壽路11號1F",     now),
+            ("21plus",      "vendor123", "21plus 信義旗艦店",     "21plus",       "台北市信義區菸廠路88號",       now),
+            ("starbucks",   "vendor123", "統一星巴克 信義店",     "統一星巴克",   "台北市信義區松壽路1號1F",      now),
+            ("sanitas",     "vendor123", "聖德科斯 中山店",       "聖德科斯",     "台北市中山區南京東路二段30號",  now),
+            ("beingsport",  "gym123",    "Being Sport 健身中心",  "健身房",       "台北市信義區松高路11號",       now),
+            ("insurance",   "ins123",    "統超保險經紀人",         "保險",         "台北市大安區光復南路280號",    now),
+            ("unisec",      "sec123",    "統一證券",              "金融",         "台北市信義區莊敬路388號",      now),
+            ("driver1",     "driver123", "外送員 小明",           "外送員",       "",                            now),
+            ("driver2",     "driver123", "外送員 小華",           "外送員",       "",                            now),
+            ("admin",       "admin123",  "管理員",                "全部",         "",                            now),
+        ],
     )
     con.commit()
 
