@@ -1458,20 +1458,20 @@ html, body, [class*="css"] {
 /* ── Hero banner（藍→橘漸層）── */
 .app-hero {
   background: linear-gradient(135deg, #003D7A 0%, #0057A8 55%, #F7941D 100%);
-  border-radius: 0 0 22px 22px;
-  padding: 18px 28px 16px;
-  margin: -1rem -1rem 1.5rem;
+  border-radius: 0 0 16px 16px;
+  padding: 10px 20px 10px;
+  margin: -1rem -1rem 1rem;
   display: flex; align-items: center; gap: 14px;
   box-shadow: 0 4px 20px rgba(0,61,122,.30);
 }
 .app-hero h1 {
-  color: #fff !important; font-size: 1.5rem !important;
+  color: #fff !important; font-size: 1.2rem !important;
   margin: 0 !important; padding: 0 !important;
   font-weight: 700 !important; text-shadow: 0 1px 4px rgba(0,0,0,.25);
 }
 .app-hero .subtitle {
-  color: rgba(255,255,255,.82) !important; font-size: 0.78rem;
-  margin: 2px 0 0 !important;
+  color: rgba(255,255,255,.82) !important; font-size: 0.72rem;
+  margin: 1px 0 0 !important;
 }
 
 /* ── 按鈕 ── */
