@@ -3207,7 +3207,6 @@ elif st.session_state.stage == "chat":
         )
         if _has_grocery_tool:
             _quick_chips = [
-                ("🛒 我想要購買", "我想要購買"),
                 ("✅ 確認下單", "確認下單"),
             ]
             _chips_html = (
