@@ -2018,7 +2018,7 @@ st.markdown(f"""
 # ═════════════════════════════════════════════════════════════════════════════
 
 if st.session_state.stage == "login":
-    _, center, _ = st.columns([1, 2, 1])
+    _, center, _ = st.columns([1, 4, 1])
     with center:
         st.markdown("### 👤 歡迎使用 統一生活管家")
         st.markdown("登入後即可開始與 AI 對話採買 💪")
