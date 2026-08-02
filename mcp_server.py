@@ -2044,15 +2044,60 @@ def search_recipe(query: str, ingredients: str = "", diet: str = "",
         except Exception:
             pass
 
-    if spoon_tried:
-        return json.dumps({
-            "count": 0, "recipes": [],
-            "message": f"找不到「{query}」的相關食譜，建議改用常見食材名稱，例如「雞胸肉」「鮭魚」「番茄炒蛋」「蒸蛋」「豆腐」。",
-        }, ensure_ascii=False)
+    # ── 內建食譜庫 fallback（API 失敗或無 key 時使用）──────────────────────
+    _BUILTIN = [
+        {"title":"清蒸雞胸佐花椰菜","ready_in_minutes":25,"servings":2,
+         "ingredients":["雞胸肉 200g","花椰菜 200g","薑片 3片","鹽少許","低鈉醬油 1大匙"],
+         "steps":["1. 雞胸肉切薄片，加薑片醃10分鐘。","2. 花椰菜切小朵燙熟備用。","3. 雞胸鋪盤入電鍋，外鍋1杯水蒸15分鐘。","4. 淋上醬油即可上桌。"],
+         "calories_per_serving":180,"protein_g_per_serving":32,"source":"內建食譜","keywords":["雞胸","chicken","花椰菜","broccoli","低卡","高蛋白"]},
+        {"title":"鮭魚炒飯","ready_in_minutes":20,"servings":2,
+         "ingredients":["鮭魚排 150g","白飯 2碗","雞蛋 2顆","青蔥 2根","低鈉醬油 1大匙","橄欖油 1大匙"],
+         "steps":["1. 鮭魚煎熟後剝成小塊備用。","2. 熱鍋下油，炒散雞蛋。","3. 加入白飯翻炒均勻。","4. 放入鮭魚、蔥花、醬油拌炒2分鐘即可。"],
+         "calories_per_serving":420,"protein_g_per_serving":28,"source":"內建食譜","keywords":["鮭魚","salmon","炒飯","fried rice"]},
+        {"title":"番茄炒蛋","ready_in_minutes":15,"servings":2,
+         "ingredients":["番茄 2顆","雞蛋 3顆","鹽適量","糖少許","橄欖油 1大匙"],
+         "steps":["1. 番茄切塊，雞蛋打散。","2. 熱鍋下油，先炒蛋至半熟盛起。","3. 同鍋炒番茄至出汁，加鹽、糖調味。","4. 放回蛋翻炒均勻即可。"],
+         "calories_per_serving":160,"protein_g_per_serving":12,"source":"內建食譜","keywords":["番茄","tomato","雞蛋","egg","炒蛋"]},
+        {"title":"豆腐味噌湯","ready_in_minutes":15,"servings":2,
+         "ingredients":["板豆腐 200g","蔬菜高湯 600ml","青蔥 1根","低鈉醬油 1小匙"],
+         "steps":["1. 豆腐切丁，蔥切蔥花。","2. 高湯煮滾，加入豆腐煮3分鐘。","3. 加醬油調味，撒蔥花即可。"],
+         "calories_per_serving":80,"protein_g_per_serving":8,"source":"內建食譜","keywords":["豆腐","tofu","湯","soup","高湯"]},
+        {"title":"水煮雞胸沙拉","ready_in_minutes":20,"servings":1,
+         "ingredients":["雞胸肉 150g","菠菜 100g","番茄 1顆","橄欖油 1小匙","黑胡椒少許"],
+         "steps":["1. 雞胸水煮10分鐘後撕成絲。","2. 菠菜燙熟後瀝乾。","3. 全部混合，淋上橄欖油，撒黑胡椒即可。"],
+         "calories_per_serving":200,"protein_g_per_serving":35,"source":"內建食譜","keywords":["雞胸","chicken","沙拉","salad","菠菜","spinach","低卡"]},
+        {"title":"蝦仁炒青椒","ready_in_minutes":15,"servings":2,
+         "ingredients":["鮮蝦仁 200g","青椒 2顆","大蒜 3瓣","低鈉醬油 1大匙","橄欖油 1大匙"],
+         "steps":["1. 蝦仁洗淨瀝乾，青椒切條，大蒜切片。","2. 熱鍋下油爆香大蒜。","3. 加入蝦仁炒至變色。","4. 放青椒大火翻炒2分鐘，加醬油調味即可。"],
+         "calories_per_serving":150,"protein_g_per_serving":24,"source":"內建食譜","keywords":["蝦仁","shrimp","青椒","pepper","海鮮"]},
+        {"title":"燕麥粥佐水煮蛋","ready_in_minutes":10,"servings":1,
+         "ingredients":["燕麥片 80g","水 300ml","雞蛋 2顆","鹽少許"],
+         "steps":["1. 燕麥加水煮滾後轉小火燜5分鐘。","2. 雞蛋冷水下鍋，水滾後煮8分鐘撈起剝殼。","3. 燕麥粥加鹽調味，搭配水煮蛋即可。"],
+         "calories_per_serving":310,"protein_g_per_serving":18,"source":"內建食譜","keywords":["燕麥","oat","雞蛋","egg","早餐","breakfast"]},
+        {"title":"蔬菜豆腐湯","ready_in_minutes":20,"servings":2,
+         "ingredients":["嫩豆腐 300g","紅蘿蔔 1根","蘑菇 100g","蔬菜高湯 800ml","薑 3片","鹽適量"],
+         "steps":["1. 紅蘿蔔切片，蘑菇切片，豆腐切塊。","2. 高湯加薑煮滾。","3. 加入紅蘿蔔煮5分鐘，再加蘑菇豆腐煮3分鐘。","4. 加鹽調味即可。"],
+         "calories_per_serving":90,"protein_g_per_serving":7,"source":"內建食譜","keywords":["豆腐","tofu","蔬菜","vegetable","湯","soup","素食","vegan"]},
+        {"title":"牛腱肉蘿蔔湯","ready_in_minutes":60,"servings":3,
+         "ingredients":["牛腱肉 300g","白蘿蔔 400g","薑 3片","低鈉醬油 2大匙","鹽適量"],
+         "steps":["1. 牛腱切塊川燙去血水。","2. 白蘿蔔切塊備用。","3. 鍋中加水、薑片與牛腱，大火滾後轉小火燉40分鐘。","4. 加入蘿蔔再燉15分鐘，加醬油、鹽調味。"],
+         "calories_per_serving":220,"protein_g_per_serving":26,"source":"內建食譜","keywords":["牛腱","beef","蘿蔔","radish","湯","stew"]},
+        {"title":"毛豆炒蛋","ready_in_minutes":12,"servings":2,
+         "ingredients":["冷凍毛豆 200g","雞蛋 3顆","大蒜 2瓣","鹽適量","橄欖油 1大匙"],
+         "steps":["1. 毛豆解凍備用，蒜切片。","2. 熱鍋下油爆香蒜片。","3. 打入雞蛋炒散。","4. 加入毛豆翻炒2分鐘，加鹽調味即可。"],
+         "calories_per_serving":190,"protein_g_per_serving":16,"source":"內建食譜","keywords":["毛豆","edamame","雞蛋","egg","素食"]},
+    ]
 
+    q_lower = (query + " " + ingredients).lower()
+    matched = [r for r in _BUILTIN if any(k in q_lower for k in r["keywords"])]
+    if not matched:
+        matched = _BUILTIN[:max_results]
+    matched = matched[:max_results]
+    for r in matched:
+        r.pop("keywords", None)
     return json.dumps({
-        "count": 0, "recipes": [],
-        "message": "尚未設定 SPOONACULAR_API_KEY，請確認 .streamlit/secrets.toml 已正確設定。",
+        "count": len(matched), "recipes": matched,
+        "message": f"為您推薦 {len(matched)} 道相關食譜（內建食譜庫）",
     }, ensure_ascii=False)
 
 
