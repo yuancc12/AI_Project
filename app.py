@@ -3182,21 +3182,21 @@ elif st.session_state.stage == "chat":
             if msg.get("tool_calls"):
                 render_tool_results(msg["tool_calls"], msg_idx=_midx)
 
-    # ── Quick Reply Chips（食材推薦後顯示，左右滑動）───────────────────
-    _food_kw = ["食材","推薦","購買","蔬菜","蛋白質","食譜","配料","克","卡路里","搜尋到","建議","商品","烹飪","高湯","豆腐","雞胸","鮭魚","蝦仁","番茄","紅蘿蔔"]
+    # ── Quick Reply Chips（search_grocery / recommend_high_protein 結果後才顯示）
+    _GROCERY_TOOLS = {"search_grocery", "recommend_high_protein", "check_inventory"}
     if st.session_state.display_msgs:
         _last_m = st.session_state.display_msgs[-1]
-        if _last_m["role"] == "assistant" and any(kw in _last_m.get("content","") for kw in _food_kw):
+        _has_grocery_tool = (
+            _last_m["role"] == "assistant" and
+            any(tc.get("tool") in _GROCERY_TOOLS for tc in _last_m.get("tool_calls", []))
+        )
+        if _has_grocery_tool:
             _quick_chips = [
                 ("🛒 我想要購買", "我想要購買"),
                 ("✅ 確認下單", "確認下單"),
-                ("🔍 還有其他推薦嗎？", "還有其他推薦嗎？"),
-                ("📦 查看購物車", "查看購物車"),
-                ("🍽️ 推薦食譜", "根據這些食材推薦食譜"),
             ]
             _chips_html = (
-                '<div style="display:flex;overflow-x:auto;gap:8px;padding:6px 2px 6px 48px;'
-                '-webkit-overflow-scrolling:touch;scrollbar-width:none;">'
+                '<div style="display:flex;gap:8px;padding:4px 2px 4px 48px;">'
             )
             for _label, _val in _quick_chips:
                 _chips_html += (
