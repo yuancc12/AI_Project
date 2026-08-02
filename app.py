@@ -2006,16 +2006,9 @@ _logo_html = (
 )
 st.markdown(f"""
 <div class="app-hero">
-  <div style="display:flex;align-items:center;gap:14px;">
+  <div style="display:flex;align-items:center;gap:12px;">
     {_logo_html}
-    <div>
-      <h1>統一生活管家</h1>
-      <p class="subtitle">
-        <i class="fa-solid fa-robot" style="font-size:.75rem;opacity:.85;"></i>&nbsp;AI 助手
-        &nbsp;✦&nbsp;
-        <i class="fa-solid fa-store" style="font-size:.72rem;opacity:.85;"></i>&nbsp;統一集團旗下品牌服務
-      </p>
-    </div>
+    <h1 style="margin:0;padding:0;color:#fff;font-size:1.15rem;font-weight:700;text-shadow:0 1px 4px rgba(0,0,0,.25);">統一生活管家</h1>
   </div>
 </div>
 """, unsafe_allow_html=True)
