@@ -2990,6 +2990,11 @@ elif st.session_state.stage == "chat":
         st.session_state.selected_courses = _sc2
         del st.query_params["rm_course"]
         st.rerun()
+    _qr_click = st.query_params.get("qr", "")
+    if _qr_click:
+        st.session_state["_pending_prompt"] = _qr_click
+        del st.query_params["qr"]
+        st.rerun()
     _adc = st.session_state.get("_add_cart_sig", "")
     if _adc:
         _cat = st.session_state.get("product_catalog", {})
@@ -3171,6 +3176,29 @@ elif st.session_state.stage == "chat":
             st.markdown(_strip_images(msg["content"]))
             if msg.get("tool_calls"):
                 render_tool_results(msg["tool_calls"], msg_idx=_midx)
+
+    # ── Quick Reply Chips（食材推薦後顯示）────────────────────────────
+    _food_kw = ["食材","推薦","購買","蔬菜","蛋白質","食譜","配料","克","卡路里","搜尋到","建議","商品","烹飪","高湯","豆腐","雞胸","鮭魚","蝦仁"]
+    if st.session_state.display_msgs:
+        _last_m = st.session_state.display_msgs[-1]
+        if _last_m["role"] == "assistant" and any(kw in _last_m.get("content","") for kw in _food_kw):
+            _quick_chips = [
+                ("🛒 我想要購買", "我想要購買"),
+                ("✅ 確認", "確認"),
+                ("🔍 還有其他推薦嗎？", "還有其他推薦嗎？"),
+            ]
+            _chips_html = '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 4px 48px;">'
+            for _label, _val in _quick_chips:
+                _enc = _url_quote(_val)
+                _chips_html += (
+                    f'<a href="?qr={_enc}" style="display:inline-flex;align-items:center;'
+                    f'padding:6px 16px;background:#EBF3FF;color:#0057A8;border:1.5px solid #0057A8;'
+                    f'border-radius:999px;font-size:0.82rem;font-weight:600;text-decoration:none;'
+                    f'white-space:nowrap;transition:background .15s;">'
+                    f'{_label}</a>'
+                )
+            _chips_html += '</div>'
+            st.markdown(_chips_html, unsafe_allow_html=True)
 
     # ── 已選商品 Pills（chat_input 正上方，融入聊天區域）───────────────
     _cart = st.session_state.get("cart", {})
