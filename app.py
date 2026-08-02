@@ -1423,6 +1423,214 @@ def render_tool_results(tool_calls: list, msg_idx: int = 0):
 
 st.set_page_config(page_title="統一生活管家", page_icon="🏪", layout="wide")
 
+# ── 全域 CSS 美化 ─────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap');
+
+:root {
+  --green: #00833D;
+  --green-light: #E8F5EE;
+  --green-dark: #005C2B;
+  --orange: #FF6600;
+  --orange-light: #FFF3EB;
+  --shadow-sm: 0 2px 8px rgba(0,0,0,.08);
+  --shadow-md: 0 4px 20px rgba(0,0,0,.12);
+  --radius: 14px;
+}
+
+html, body, [class*="css"] {
+  font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif !important;
+}
+
+/* ── 隱藏預設 Streamlit header/footer ── */
+#MainMenu, footer, header { visibility: hidden; }
+
+/* ── 頁面背景 ── */
+.stApp { background: #F4F8F6; }
+.stApp > header { background: transparent !important; }
+
+/* ── 自訂頂部 banner ── */
+.app-hero {
+  background: linear-gradient(135deg, #00833D 0%, #00A34F 60%, #FF6600 100%);
+  border-radius: 0 0 20px 20px;
+  padding: 18px 28px 16px;
+  margin: -1rem -1rem 1.5rem;
+  display: flex; align-items: center; gap: 14px;
+  box-shadow: 0 4px 18px rgba(0,131,61,.25);
+}
+.app-hero h1 {
+  color: #fff !important; font-size: 1.5rem !important;
+  margin: 0 !important; padding: 0 !important;
+  font-weight: 700 !important; text-shadow: 0 1px 4px rgba(0,0,0,.2);
+}
+.app-hero .subtitle {
+  color: rgba(255,255,255,.85) !important; font-size: 0.78rem;
+  margin: 2px 0 0 !important;
+}
+
+/* ── 按鈕美化 ── */
+div.stButton > button {
+  border-radius: 10px !important;
+  font-weight: 600 !important;
+  transition: transform .15s, box-shadow .15s !important;
+  letter-spacing: .02em;
+}
+div.stButton > button:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 6px 18px rgba(0,131,61,.25) !important;
+}
+div.stButton > button[kind="primary"] {
+  background: linear-gradient(135deg, #00833D, #00A34F) !important;
+  border: none !important;
+  box-shadow: 0 3px 10px rgba(0,131,61,.30) !important;
+}
+div.stButton > button[kind="primary"]:hover {
+  background: linear-gradient(135deg, #005C2B, #00833D) !important;
+  box-shadow: 0 6px 18px rgba(0,131,61,.40) !important;
+}
+
+/* ── 聊天訊息動畫 ── */
+@keyframes fadeInUp {
+  from { opacity:0; transform:translateY(10px); }
+  to   { opacity:1; transform:translateY(0);    }
+}
+.stChatMessage {
+  animation: fadeInUp .25s ease both;
+  border-radius: var(--radius) !important;
+  margin-bottom: .6rem !important;
+}
+/* 用戶訊息 */
+[data-testid="stChatMessage"][data-testid*="user"],
+.stChatMessage:has([data-testid="chatAvatarIcon-user"]) {
+  background: linear-gradient(135deg, #E8F5EE, #D4EEE1) !important;
+  border: 1px solid #C0E0CE !important;
+}
+/* AI 訊息 */
+.stChatMessage:has([data-testid="chatAvatarIcon-assistant"]) {
+  background: #fff !important;
+  border: 1px solid #E8E8E8 !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+
+/* ── 聊天輸入框 ── */
+.stChatInputContainer {
+  background: #fff !important;
+  border-radius: 16px !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,.1) !important;
+  border: 2px solid #C8E6D4 !important;
+  transition: border-color .2s;
+}
+.stChatInputContainer:focus-within {
+  border-color: var(--green) !important;
+  box-shadow: 0 2px 16px rgba(0,131,61,.15) !important;
+}
+
+/* ── Metric 卡片 ── */
+[data-testid="stMetric"] {
+  background: #fff;
+  border-radius: var(--radius) !important;
+  padding: 14px 18px !important;
+  box-shadow: var(--shadow-sm) !important;
+  border-left: 4px solid var(--green) !important;
+  transition: transform .2s, box-shadow .2s;
+}
+[data-testid="stMetric"]:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md) !important;
+}
+[data-testid="stMetricValue"] { color: var(--green-dark) !important; font-weight: 700 !important; }
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] {
+  background: #fff !important;
+  border-radius: 12px 12px 0 0 !important;
+  padding: 6px 6px 0 !important;
+  gap: 4px !important;
+  box-shadow: 0 -1px 0 #E0E0E0 inset;
+}
+.stTabs [data-baseweb="tab"] {
+  border-radius: 8px 8px 0 0 !important;
+  font-weight: 600 !important;
+  color: #666 !important;
+  padding: 8px 16px !important;
+  transition: background .2s, color .2s !important;
+}
+.stTabs [aria-selected="true"] {
+  background: var(--green-light) !important;
+  color: var(--green-dark) !important;
+  border-bottom: 3px solid var(--green) !important;
+}
+
+/* ── Expander ── */
+.streamlit-expanderHeader {
+  background: #fff !important;
+  border-radius: var(--radius) !important;
+  font-weight: 600 !important;
+  border: 1px solid #E0EDE6 !important;
+  transition: background .2s;
+}
+.streamlit-expanderHeader:hover { background: var(--green-light) !important; }
+
+/* ── Input / Select ── */
+.stTextInput input, .stSelectbox select, .stTextArea textarea {
+  border-radius: 10px !important;
+  border: 1.5px solid #D0E6DA !important;
+  transition: border-color .2s, box-shadow .2s !important;
+}
+.stTextInput input:focus, .stTextArea textarea:focus {
+  border-color: var(--green) !important;
+  box-shadow: 0 0 0 3px rgba(0,131,61,.12) !important;
+}
+
+/* ── Success / Info / Warning / Error ── */
+[data-testid="stAlert"] { border-radius: var(--radius) !important; }
+
+/* ── Sidebar ── */
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #00410F 0%, #005C2B 40%, #002D17 100%) !important;
+}
+[data-testid="stSidebar"] * { color: #E8F5EE !important; }
+[data-testid="stSidebar"] .stButton > button {
+  background: rgba(255,255,255,.12) !important;
+  border: 1px solid rgba(255,255,255,.2) !important;
+  color: #fff !important;
+}
+[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+  background: linear-gradient(135deg, var(--orange), #FF8800) !important;
+  border: none !important;
+  color: #fff !important;
+}
+[data-testid="stSidebar"] input {
+  background: rgba(255,255,255,.1) !important;
+  border-color: rgba(255,255,255,.25) !important;
+  color: #fff !important;
+}
+
+/* ── 登入卡片 ── */
+.login-card {
+  background: #fff;
+  border-radius: 20px;
+  padding: 32px;
+  box-shadow: 0 8px 40px rgba(0,0,0,.12);
+  border: 1px solid #E0EDE6;
+}
+
+/* ── 表單 section 標題 ── */
+.section-label {
+  font-weight: 700;
+  color: var(--green-dark);
+  font-size: 1.05rem;
+  border-left: 4px solid var(--orange);
+  padding-left: 10px;
+  margin: 1rem 0 .5rem;
+}
+
+/* ── Divider ── */
+hr { border-color: #E0EDE6 !important; }
+</style>
+""", unsafe_allow_html=True)
+
 # ── PWA meta tags + manifest（讓手機可「加入主畫面」成為 app）────────────────
 st.markdown("""
 <script>
@@ -1762,9 +1970,15 @@ with st.sidebar:
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 
-st.markdown("## 🏪 統一生活管家")
-st.caption("統一集團 × AI 助手 ✦ 7-11・萬家福・康是美・統一生機・Mister Donut・Cold Stone・21plus・統一星巴克・聖德科斯")
-st.divider()
+st.markdown("""
+<div class="app-hero">
+  <div style="font-size:2.4rem;line-height:1;">🏪</div>
+  <div>
+    <h1>統一生活管家</h1>
+    <p class="subtitle">統一集團 × AI 助手 ✦ 7-11・萬家福・康是美・統一生機・Mister Donut・Cold Stone・21plus・統一星巴克・聖德科斯</p>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STAGE: LOGIN

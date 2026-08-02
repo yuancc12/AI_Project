@@ -29,6 +29,215 @@ from mcp_server import _send_email
 
 st.set_page_config(page_title="健康採買後台", page_icon="🏪", layout="wide")
 
+# ── 後台全域 CSS ──────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap');
+
+:root {
+  --green: #00833D;
+  --green-dark: #005C2B;
+  --green-light: #E8F5EE;
+  --orange: #FF6600;
+  --blue: #1565C0;
+  --shadow-sm: 0 2px 8px rgba(0,0,0,.08);
+  --shadow-md: 0 4px 20px rgba(0,0,0,.12);
+  --radius: 12px;
+}
+
+html, body, [class*="css"] {
+  font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif !important;
+}
+
+#MainMenu, footer { visibility: hidden; }
+
+.stApp { background: #F0F4F2; }
+
+/* ── 後台頂部 banner ── */
+.dashboard-hero {
+  background: linear-gradient(135deg, #002D17 0%, #004D22 50%, #00833D 100%);
+  border-radius: 0 0 18px 18px;
+  padding: 16px 28px 14px;
+  margin: -1rem -1rem 1.5rem;
+  display: flex; align-items: center; justify-content: space-between;
+  box-shadow: 0 4px 20px rgba(0,45,23,.35);
+}
+.dashboard-hero-left { display:flex; align-items:center; gap:14px; }
+.dashboard-hero h1 {
+  color: #fff !important; font-size: 1.35rem !important;
+  margin: 0 !important; padding: 0 !important; font-weight: 700 !important;
+}
+.dashboard-hero .subtitle {
+  color: rgba(255,255,255,.75) !important; font-size: 0.75rem; margin-top:2px !important;
+}
+.dashboard-hero-user {
+  background: rgba(255,255,255,.15);
+  border: 1px solid rgba(255,255,255,.25);
+  border-radius: 999px;
+  padding: 6px 16px;
+  color: #fff !important;
+  font-size: 0.85rem;
+  font-weight: 600;
+  display:flex; align-items:center; gap:6px;
+}
+
+/* ── Metric 卡片（後台版，帶漸層）── */
+[data-testid="stMetric"] {
+  background: #fff !important;
+  border-radius: var(--radius) !important;
+  padding: 16px 20px !important;
+  box-shadow: var(--shadow-sm) !important;
+  border-top: 4px solid var(--green) !important;
+  transition: transform .2s, box-shadow .2s;
+  position: relative;
+  overflow: hidden;
+}
+[data-testid="stMetric"]::before {
+  content: '';
+  position: absolute; top:0; right:0;
+  width: 80px; height: 80px;
+  background: var(--green-light);
+  border-radius: 0 0 0 80px;
+  opacity: .6;
+}
+[data-testid="stMetric"]:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-md) !important;
+}
+[data-testid="stMetricValue"] { color: var(--green-dark) !important; font-weight: 700 !important; font-size: 1.8rem !important; }
+[data-testid="stMetricLabel"] { color: #555 !important; font-weight: 600 !important; }
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] {
+  background: #fff !important;
+  border-radius: 12px 12px 0 0 !important;
+  padding: 6px 8px 0 !important;
+  gap: 4px !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+.stTabs [data-baseweb="tab"] {
+  border-radius: 8px 8px 0 0 !important;
+  font-weight: 600 !important;
+  color: #555 !important;
+  padding: 9px 18px !important;
+  transition: all .2s !important;
+  border-bottom: 3px solid transparent !important;
+}
+.stTabs [data-baseweb="tab"]:hover { background: #F0F4F2 !important; color: var(--green-dark) !important; }
+.stTabs [aria-selected="true"] {
+  background: var(--green-light) !important;
+  color: var(--green-dark) !important;
+  border-bottom: 3px solid var(--green) !important;
+}
+.stTabs [data-baseweb="tab-panel"] {
+  background: #fff !important;
+  border-radius: 0 0 var(--radius) var(--radius) !important;
+  padding: 16px !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+
+/* ── 按鈕 ── */
+div.stButton > button {
+  border-radius: 10px !important;
+  font-weight: 600 !important;
+  letter-spacing: .02em !important;
+  transition: transform .15s, box-shadow .15s !important;
+}
+div.stButton > button:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 4px 14px rgba(0,0,0,.15) !important;
+}
+div.stButton > button[kind="primary"] {
+  background: linear-gradient(135deg, #00833D, #00A34F) !important;
+  border: none !important;
+  box-shadow: 0 3px 10px rgba(0,131,61,.3) !important;
+}
+
+/* ── Input ── */
+.stTextInput input, .stSelectbox > div, .stNumberInput input, .stTextArea textarea {
+  border-radius: 8px !important;
+  border: 1.5px solid #D0DDD6 !important;
+  transition: border-color .2s, box-shadow .2s !important;
+}
+.stTextInput input:focus, .stTextArea textarea:focus {
+  border-color: var(--green) !important;
+  box-shadow: 0 0 0 3px rgba(0,131,61,.12) !important;
+}
+
+/* ── Expander ── */
+.streamlit-expanderHeader {
+  background: #fff !important;
+  border-radius: var(--radius) !important;
+  font-weight: 600 !important;
+  border: 1px solid #E0EDE6 !important;
+  transition: background .2s;
+}
+.streamlit-expanderHeader:hover { background: var(--green-light) !important; }
+
+/* ── 表格行 hover ── */
+[data-testid="stDataFrame"] tbody tr:hover { background: var(--green-light) !important; }
+
+/* ── 統計圖表容器 ── */
+[data-testid="stArrowVegaLiteChart"] {
+  border-radius: var(--radius) !important;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm) !important;
+}
+
+/* ── Container with border ── */
+[data-testid="stVerticalBlockBorderWrapper"] {
+  border-radius: var(--radius) !important;
+  border-color: #D8EAE0 !important;
+  background: #fff !important;
+}
+
+/* ── 成功/錯誤/警告 訊息 ── */
+[data-testid="stAlert"] { border-radius: var(--radius) !important; }
+
+/* ── Divider ── */
+hr { border-color: #D8EAE0 !important; }
+
+/* ── 登入頁卡片 ── */
+.vendor-login-card {
+  background: #fff;
+  border-radius: 20px;
+  padding: 36px 32px;
+  box-shadow: 0 8px 40px rgba(0,0,0,.14);
+  border: 1px solid #D8EAE0;
+}
+.vendor-login-logo {
+  text-align: center;
+  font-size: 3.5rem;
+  margin-bottom: 4px;
+}
+
+/* ── 諮詢單狀態 badge ── */
+.status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* ── Section card ── */
+.section-card {
+  background: #fff;
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 12px;
+}
+
+/* ── 頂部 metrics 區域動畫 ── */
+@keyframes fadeInDown {
+  from { opacity:0; transform:translateY(-8px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+[data-testid="stMetric"] { animation: fadeInDown .3s ease both; }
+</style>
+""", unsafe_allow_html=True)
+
 # ── Session state init ───────────────────────────────────────────────────────
 
 for _k, _v in {"vendor_id": None, "vendor_store": None, "vendor_brand": None}.items():
@@ -38,11 +247,22 @@ for _k, _v in {"vendor_id": None, "vendor_store": None, "vendor_brand": None}.it
 # ── Login guard ──────────────────────────────────────────────────────────────
 
 if not st.session_state.vendor_id:
-    st.title("🏪 健康採買後台 — 登入")
-    st.divider()
+    st.markdown("""
+    <div class="dashboard-hero" style="margin-bottom:2rem;">
+      <div class="dashboard-hero-left">
+        <div style="font-size:2.2rem;">🏪</div>
+        <div>
+          <h1>統一生活管家 — 後台管理</h1>
+          <p class="subtitle">統一集團 × MCP Server ✦ 商品庫存 · 採買諮詢 · 外送派送</p>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
     _, _center, _ = st.columns([1, 2, 1])
     with _center:
-        st.markdown("### 👤 後台人員登入")
+        st.markdown('<div class="vendor-login-card">', unsafe_allow_html=True)
+        st.markdown('<div class="vendor-login-logo">🔐</div>', unsafe_allow_html=True)
+        st.markdown("### 後台人員登入")
         st.caption("請使用您的門市帳號登入")
         _vu = st.text_input("帳號", key="vu", placeholder="例：7-11-A")
         _vp = st.text_input("密碼", type="password", key="vp", placeholder="請輸入密碼")
@@ -55,6 +275,7 @@ if not st.session_state.vendor_id:
                 st.rerun()
             else:
                 st.error("帳號或密碼錯誤，請再試一次。")
+        st.markdown('</div>', unsafe_allow_html=True)
         st.divider()
         st.markdown("""
 **測試帳號一覽**
@@ -81,17 +302,27 @@ if not st.session_state.vendor_id:
 
 # ── 標題 + 登出 ──────────────────────────────────────────────────────────────
 
-_col_ttl, _col_usr, _col_out = st.columns([4, 2, 1])
-_col_ttl.title("🏪 統一生活管家 — 後台管理")
-_col_usr.markdown(
-    f'<div style="padding-top:14px;color:#555">👤 <strong>{st.session_state.vendor_store}</strong></div>',
-    unsafe_allow_html=True,
-)
-if _col_out.button("登出", key="v_logout"):
-    for _k in ["vendor_id", "vendor_store", "vendor_brand"]:
-        st.session_state[_k] = None
-    st.rerun()
-st.caption("統一集團 × MCP Server ✦ 商品庫存 · 採買諮詢 · 外送派送 ｜ 後台 AI + mcp.Client")
+_logout_col, _ = st.columns([1, 8])
+with _logout_col:
+    if st.button("登出", key="v_logout"):
+        for _k in ["vendor_id", "vendor_store", "vendor_brand"]:
+            st.session_state[_k] = None
+        st.rerun()
+
+st.markdown(f"""
+<div class="dashboard-hero">
+  <div class="dashboard-hero-left">
+    <div style="font-size:2.2rem;">🏪</div>
+    <div>
+      <h1>統一生活管家 — 後台管理</h1>
+      <p class="subtitle">統一集團 × MCP Server ✦ 商品庫存 · 採買諮詢 · 外送派送 ｜ 後台 AI + mcp.Client</p>
+    </div>
+  </div>
+  <div class="dashboard-hero-user">
+    👤 {st.session_state.vendor_store}
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ── 品牌判斷（頁籤與統計共用） ────────────────────────────────────────────────
 
