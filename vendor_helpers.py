@@ -14,7 +14,7 @@ from datetime import datetime
 from openai import OpenAI
 from mcp import Client
 
-DB = os.path.join(os.path.dirname(__file__), "butler.db")
+DB = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "butler.db"))
 if not os.path.exists(DB):
     import seed
     seed.main()
