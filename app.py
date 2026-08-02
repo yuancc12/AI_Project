@@ -2013,7 +2013,7 @@ st.markdown(f"""
       <p class="subtitle">
         <i class="fa-solid fa-robot" style="font-size:.75rem;opacity:.85;"></i>&nbsp;AI 助手
         &nbsp;✦&nbsp;
-        <i class="fa-solid fa-store" style="font-size:.72rem;opacity:.85;"></i>&nbsp;7-11・萬家福・康是美・統一生機・Mister Donut・Cold Stone・21plus・統一星巴克・聖德科斯
+        <i class="fa-solid fa-store" style="font-size:.72rem;opacity:.85;"></i>&nbsp;統一集團旗下品牌服務
       </p>
     </div>
   </div>
