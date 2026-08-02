@@ -1914,7 +1914,7 @@ def search_recipe(query: str, ingredients: str = "", diet: str = "",
     headers = {"User-Agent": "LifeButlerBot/1.0 (Hackathon)"}
 
     # ── 嘗試 Spoonacular ────────────────────────────────────────────────────
-    spoon_key = os.environ.get("SPOONACULAR_API_KEY", "") or "8118232606424cc2b050b2244d124054"
+    spoon_key = os.environ.get("SPOONACULAR_API_KEY", "") or "61b0c17199dc4ce1846ddd5c2ef6ca06"
     spoon_tried = False  # 記錄是否成功連線 Spoonacular（但可能 0 結果）
     if spoon_key:
         def _spoon_search(q: str) -> list:
